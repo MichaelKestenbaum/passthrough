@@ -123,6 +123,8 @@ targets:
         product: PassthroughUI
       - package: PassthroughCore
         product: PhoneTransport
+      - package: PassthroughCore
+        product: VPNConfig
       - target: PassthroughHelper
         embed: true
         link: false
@@ -159,6 +161,10 @@ targets:
     sources:
       - path: macOS/Helper
       - path: macOS/Shared
+    dependencies:
+      # Parsing and pinning only (Foundation + CryptoKit); keeps the root helper's surface small.
+      - package: PassthroughCore
+        product: VPNConfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.dpatel.passthrough.helper

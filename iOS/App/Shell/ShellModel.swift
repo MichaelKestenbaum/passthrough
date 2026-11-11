@@ -41,7 +41,8 @@ final class ShellModel: ObservableObject {
     @Published var macs: [ShellCredential] = []
     /// Changed by the UI only through `select(_:)`.
     @Published private(set) var selectedMacID: String? {
-        didSet { if selectedMacID != oldValue, !applyingRefresh { connect() } }
+        // The watch on the newly selected Mac ends before the live connection dials it.
+        didSet { if selectedMacID != oldValue, !applyingRefresh { updateWatcher(); connect() } }
     }
     @Published private(set) var reach: Reach = .noAccess {
         didSet {
@@ -99,8 +100,8 @@ final class ShellModel: ObservableObject {
         didSet {
             guard connectMode != oldValue else { return }
             UserDefaults.standard.set(connectMode.rawValue, forKey: Self.connectModeKey)
-            if !macs.isEmpty { connect() }
             updateWatcher()
+            if !macs.isEmpty { connect() }
         }
     }
     /// The other paired Macs' sessions and state, while the app is in the foreground.
@@ -368,7 +369,6 @@ final class ShellModel: ObservableObject {
         selectedAt[macID] = Date().timeIntervalSince1970
         UserDefaults.standard.set(selectedAt, forKey: Self.lastSelectedKey)
         selectedMacID = macID
-        updateWatcher()
     }
 
     /// The phone forgot this Mac: drop its key, address, tabs and any connection to it.
@@ -381,14 +381,17 @@ final class ShellModel: ObservableObject {
         macs.removeAll { $0.macID == macID }
         if selectedMacID == macID { selectedMacID = macs.first?.macID }
         applyingRefresh = false
-        if macs.isEmpty { clear(.noAccess) } else if client == nil { connect() }
+        if macs.isEmpty { clear(.noAccess) } else {
+            // Before dialling: the new selection's watch (if any) ends first.
+            updateWatcher()
+            if client == nil { connect() }
+        }
         var heard = Self.lastHeardStore
         heard[macID] = nil
         UserDefaults.standard.set(heard, forKey: Self.lastHeardKey)
         var selectedAt = Self.lastSelectedStore
         selectedAt[macID] = nil
         UserDefaults.standard.set(selectedAt, forKey: Self.lastSelectedKey)
-        if !macs.isEmpty { updateWatcher() }
         tabMemory.forget(macID)
         saveTabMemory()
         hiddenSessions.apply(listed: [], on: macID)

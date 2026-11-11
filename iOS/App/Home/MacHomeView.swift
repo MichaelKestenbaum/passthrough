@@ -12,6 +12,8 @@ struct MacHomeView: View {
     @Binding var showPairing: Bool
     @Binding var showSettings: Bool
     @State private var showSwitcher = false
+    /// Add a Mac or Settings, chosen in the switcher; presented once it has gone.
+    @State private var afterSwitcher: SwitcherNext?
     @State private var confirmSleep = false
     @State private var confirmVPNOff = false
     /// The switch last changed here, so a refusal without a switch named lands under it.
@@ -22,7 +24,7 @@ struct MacHomeView: View {
     private var macID: String? { shell.selectedMacID ?? model.pairedClients.first?.id }
     private var macName: String { shell.selectedMacName }
     private var onlineThroughPhone: Bool { macID.map(model.connectedMacIDs.contains) ?? false }
-    private var paired: Bool { !model.pairedClients.isEmpty || !shell.macs.isEmpty }
+    private var paired: Bool { !model.pairedClients.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -75,8 +77,8 @@ struct MacHomeView: View {
         } message: {
             Text(runningShells == 1 ? "1 running shell pauses until it wakes." : "\(runningShells) running shells pause until it wakes.")
         }
-        .sheet(isPresented: $showSwitcher) {
-            MacSwitcherSheet(shell: shell, showPairing: $showPairing, showSettings: $showSettings)
+        .sheet(isPresented: $showSwitcher, onDismiss: runAfterSwitcher) {
+            MacSwitcherSheet(shell: shell, then: $afterSwitcher)
         }
         .sheet(isPresented: $confirmVPNOff) {
             VPNOffSheet(macName: macName, killSwitch: state?.killSwitch == true) { shell.control(.vpn(false)) }
@@ -91,6 +93,15 @@ struct MacHomeView: View {
             }
         }
         #endif
+    }
+
+    private func runAfterSwitcher() {
+        defer { afterSwitcher = nil }
+        switch afterSwitcher {
+        case .addMac: showPairing = true
+        case .settings: showSettings = true
+        case nil: break
+        }
     }
 
     // MARK: Needs you

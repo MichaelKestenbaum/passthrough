@@ -29,7 +29,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var state: ServiceState = .stopped
     @Published private(set) var meter = TrafficMeter()
     @Published private(set) var stats = ProviderStats(rx: 0, tx: 0, active: 0, totalConnections: 0, macs: [], startedAt: nil)
-    @Published private(set) var pairedClients: [PairedClient] = []
+    @Published private(set) var pairedClients: [PairedClient] = [] {
+        didSet {
+            #if DEBUG
+            // Demo only (`-PTDemoShell`): the two demo Macs are the paired Macs.
+            if let demo = ShellModel.demoState, demo != "noAccess", pairedClients != Self.demoPaired { pairedClients = Self.demoPaired }
+            #endif
+        }
+    }
+    #if DEBUG
+    private static let demoPaired = [
+        PairedClient(id: "demo-mac", name: "MacBook Pro", tokenHash: "", pairedAt: .now),
+        PairedClient(id: "demo-mac-2", name: "Home Studio", tokenHash: "", pairedAt: .now),
+    ]
+    #endif
     @Published private(set) var pairingCode: (code: String, expiry: Date)?
     /// The code shown was withdrawn after too many wrong guesses (by whichever process checks codes).
     @Published private(set) var pairingCodeWithdrawn = false

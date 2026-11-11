@@ -35,26 +35,23 @@ struct MacAvatar: View {
     }
 }
 
+/// What the switcher hands its host to present once it has closed.
+enum SwitcherNext { case addMac, settings }
+
 /// "Your Macs": every paired Mac with what it's doing, then Add a Mac and Settings.
 struct MacSwitcherSheet: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var router: ShellRouter
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var shell: ShellModel
-    @Binding var showPairing: Bool
-    @Binding var showSettings: Bool
+    @Binding var then: SwitcherNext?
 
     private struct Row: Identifiable { let id: String; let name: String }
 
-    /// Every paired Mac, then any Mac with a shell key the pairing list lacks.
     private var rows: [Row] {
-        var list = model.pairedClients.map { client in
+        model.pairedClients.map { client in
             Row(id: client.id, name: shell.macs.first { $0.macID == client.id }?.macName ?? client.name)
         }
-        for mac in shell.macs where !list.contains(where: { $0.id == mac.macID }) {
-            list.append(Row(id: mac.macID, name: mac.macName))
-        }
-        return list
     }
 
     var body: some View {
@@ -71,9 +68,9 @@ struct MacSwitcherSheet: View {
                     }
                     PTSurface(padding: 6) {
                         VStack(spacing: 0) {
-                            actionRow("Add a Mac", systemImage: "plus") { open { showPairing = true } }
+                            actionRow("Add a Mac", systemImage: "plus") { then = .addMac; dismiss() }
                             Divider().padding(.leading, 62)
-                            actionRow("Settings", systemImage: "gearshape") { open { showSettings = true } }
+                            actionRow("Settings", systemImage: "gearshape") { then = .settings; dismiss() }
                         }
                     }
                 }
@@ -86,12 +83,6 @@ struct MacSwitcherSheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
-    }
-
-    /// Closes this sheet, then runs `action` once it is gone (a sheet can't open over a closing one).
-    private func open(_ action: @escaping () -> Void) {
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: action)
     }
 
     private func macRow(_ row: Row) -> some View {

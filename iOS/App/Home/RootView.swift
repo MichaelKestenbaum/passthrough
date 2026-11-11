@@ -171,9 +171,11 @@ extension RootView {
         if let id = controller.activityMacID {
             if id == shell.selectedMacID {
                 activity = selected
-            } else if let mac = shell.macs.first(where: { $0.macID == id }) {
+            } else if let client = model.pairedClients.first(where: { $0.id == id }) {
+                // Still paired: locked, without its credential or not watched yet, it keeps what it last showed.
                 if let heard = shell.watcher.seen[id], heard.state != nil {
-                    activity = .init(macID: id, macName: mac.macName, reachable: heard.reachable, lastHeard: heard.lastHeard,
+                    let name = shell.macs.first(where: { $0.macID == id })?.macName ?? client.name
+                    activity = .init(macID: id, macName: name, reachable: heard.reachable, lastHeard: heard.lastHeard,
                                      state: heard.state, sessions: heard.sessions ?? [])
                 }
             } else {

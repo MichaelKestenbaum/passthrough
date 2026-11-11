@@ -31,7 +31,31 @@ final class MacActivityController {
     private var awaitingAwakeUntil: Date?
     private var lastSeen: Seen?
 
-    private var activity: Activity<MacActivityAttributes>? { Activity<MacActivityAttributes>.activities.first }
+    private var activity: Activity<MacActivityAttributes>? { Activity<MacActivityAttributes>.activities.first { $0.activityState != .ended && !endedIDs.contains($0.id) } }
+    /// Activities an end was asked for that hasn't landed yet.
+    private var endedIDs: Set<String> = []
+    private var announcedMac: String?
+    /// Called with the activity's Mac ID when it changes (nil when none), so the app can keep watching it.
+    var onActivityMacChange: ((String?) -> Void)? { didSet { announced(force: true) } }
+
+    /// The Mac the running Live Activity belongs to (from its attributes, so it survives a relaunch).
+    var activityMacID: String? {
+        guard let activity else { return nil }
+        return activity.attributes.macID
+    }
+    
+    private func announced(force: Bool = false) {
+        let id = activityMacID
+        guard force || id != announcedMac else { return }
+        announcedMac = id
+        onActivityMacChange?(id)
+    }
+
+    private func end(_ activity: Activity<MacActivityAttributes>, _ content: ActivityContent<MacActivityAttributes.ContentState>?) {
+        endedIDs.insert(activity.id)
+        announced()
+        Task { await activity.end(content, dismissalPolicy: .immediate) }
+    }
 
     private init() { MacSnapshot.removeLegacy() }
 
@@ -40,6 +64,10 @@ final class MacActivityController {
     /// without the Mac's state: there'd be nothing true to show.
     func keepAwakeAsked(_ seen: Seen) {
         guard seen.reachable, let state = seen.state else { return }
+        // Keep awake on another Mac than the running activity's: it moves there.
+        if let running = activity, let id = running.attributes.macID, id != seen.macID {
+            end(running, nil)
+        }
         lastSeen = seen
         awaitingAwakeUntil = state.awake == true ? nil : .now + Self.awakeGrace
         let content = ActivityContent(state: Self.content(seen), staleDate: Self.stale(state))
@@ -47,7 +75,7 @@ final class MacActivityController {
             Task { await activity.update(content) }
         } else if ActivityAuthorizationInfo().areActivitiesEnabled {
             do {
-                _ = try Activity.request(attributes: MacActivityAttributes(macName: seen.macName, startedAt: .now), content: content)
+                _ = try Activity.request(attributes: MacActivityAttributes(macName: seen.macName, startedAt: .now, macID: seen.macID), content: content)
             } catch {
                 PassthroughLog.shared.log(.warning, "Live Activity could not start: \(error.localizedDescription)")
             }
@@ -56,23 +84,33 @@ final class MacActivityController {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.awakeGrace + 1))
             guard let self, let seen = self.lastSeen else { return }
-            self.refresh(seen)
+            self.refresh(selected: nil, activity: seen)
         }
+        announced()
     }
 
-    /// Something the app sees changed: update the Live Activity, or end it
-    /// once Keep awake is off (back at the desk) or the Mac's state is gone,
-    /// and refresh the widget.
-    func refresh(_ seen: Seen) {
-        lastSeen = seen
-        if seen.state?.awake == true { awaitingAwakeUntil = nil }
-        if let activity { update(activity, seen) }
-        writeSnapshot(seen)
+    /// Something the app sees changed: update the Live Activity from the Mac
+    /// it belongs to (`activity`, nil until that Mac has said anything), or
+    /// end it once Keep awake is off there or its state is gone, and refresh
+    /// the widget: the activity's Mac while one runs, else the selected Mac
+    /// (`selected`, nil while it is connecting). Switching Macs never ends it.
+    func refresh(selected: Seen?, activity seen: Seen?) {
+        if let activity {
+            guard let seen else { announced(); return }
+            lastSeen = seen
+            if seen.state?.awake == true { awaitingAwakeUntil = nil }
+            update(activity, seen)
+            writeSnapshot(seen)
+        } else if let selected {
+            lastSeen = selected
+            writeSnapshot(selected)
+        }
+        announced()
     }
 
     private func update(_ activity: Activity<MacActivityAttributes>, _ seen: Seen) {
         guard let state = seen.state else {
-            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            end(activity, nil)
             return
         }
         guard seen.reachable else {
@@ -88,7 +126,7 @@ final class MacActivityController {
             if let until = awaitingAwakeUntil, until > .now { return }
             awaitingAwakeUntil = nil
             let final = ActivityContent(state: Self.content(seen), staleDate: nil)
-            Task { await activity.end(final, dismissalPolicy: .immediate) }
+            end(activity, final)
             return
         }
         let content = ActivityContent(state: Self.content(seen), staleDate: Self.stale(state))
@@ -97,7 +135,7 @@ final class MacActivityController {
 
     /// The Mac was forgotten, or nothing is set up: no stale Mac on the Lock Screen or Home Screen.
     func clear() {
-        if let activity { Task { await activity.end(nil, dismissalPolicy: .immediate) } }
+        if let activity { end(activity, nil) }
         awaitingAwakeUntil = nil
         lastSeen = nil
         MacSnapshot.clear()

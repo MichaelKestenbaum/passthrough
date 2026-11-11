@@ -79,7 +79,11 @@ struct RootView: View {
         .onChange(of: model.shell.reach) { _, _ in runPendingLink(); refreshSurfaces() }
         .onChange(of: model.shell.macState) { _, _ in runPendingLink(); refreshSurfaces() }
         .onChange(of: model.shell.sessions) { _, _ in refreshSurfaces() }
+        .onChange(of: model.shell.watcher.seen) { _, _ in refreshSurfaces() }
+        .onChange(of: model.shell.selectedMacID) { _, _ in refreshSurfaces() }
         .onAppear {
+            // Keep watching the Mac a running Live Activity belongs to (also after a relaunch).
+            MacActivityController.shared.onActivityMacChange = { [shell = model.shell] in shell.pinWatch($0) }
             // A link that came in before the first unlock built this.
             runPendingLink()
             #if DEBUG
@@ -144,11 +148,28 @@ extension RootView {
     private func refreshSurfaces() {
         let shell = model.shell
         guard !shell.macs.isEmpty || !model.pairedClients.isEmpty else { return MacActivityController.shared.clear() }
+        let controller = MacActivityController.shared
+        let selected: MacActivityController.Seen?
         switch shell.reach {
-        case .ready: MacActivityController.shared.refresh(seen(reachable: true))
-        case .unreachable, .noAccess: MacActivityController.shared.refresh(seen(reachable: false))
-        case .connecting, .locked, .needsPasscode, .keyUnavailable: break
+        case .ready: selected = seen(reachable: true)
+        case .unreachable, .noAccess: selected = seen(reachable: false)
+        case .connecting, .locked, .needsPasscode, .keyUnavailable: selected = nil
         }
+        // The activity follows the Mac Keep awake was turned on for, not the selection.
+        var activity: MacActivityController.Seen?
+        if let id = controller.activityMacID {
+            if id == shell.selectedMacID {
+                activity = selected
+            } else if let mac = shell.macs.first(where: { $0.macID == id }) {
+                if let heard = shell.watcher.seen[id], heard.state != nil {
+                    activity = .init(macID: id, macName: mac.macName, reachable: heard.reachable, lastHeard: heard.lastHeard,
+                                     state: heard.state, sessions: heard.sessions ?? [])
+                }
+            } else {
+                controller.clear()   // that Mac was forgotten
+            }
+        }
+        controller.refresh(selected: selected, activity: activity)
     }
 }
 

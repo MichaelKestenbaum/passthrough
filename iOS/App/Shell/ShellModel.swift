@@ -106,8 +106,15 @@ final class ShellModel: ObservableObject {
     }
     /// The other paired Macs' sessions and state, while the app is in the foreground.
     let watcher = MacWatcher()
-    /// Macs watched whatever the cap (the Live Activity's Mac); set by Task 7's wiring.
+    /// Macs watched whatever the cap (the Live Activity's Mac).
     private var watchPinned: Set<String> = []
+    /// Watches the Live Activity's Mac whatever the cap (nil: none).
+    func pinWatch(_ macID: String?) {
+        let pinned = macID.map { Set([$0]) } ?? []
+        guard pinned != watchPinned else { return }
+        watchPinned = pinned
+        updateWatcher()
+    }
     /// Output for `(session, bytes)`, for the terminal views.
     let output = PassthroughSubject<(String, Data), Never>()
     /// A session's output is about to start over: sent before an attach request

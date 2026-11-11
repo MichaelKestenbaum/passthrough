@@ -142,6 +142,17 @@ object MacProfiles {
         return (hash % paletteCount).toInt()
     }
 
+    /**
+     * Which Mac is selected after the paired list or credentials change: [current] while it is still
+     * paired (with or without a shell credential); else [lastUsed] if paired; else the first paired
+     * Mac with a shell, then the first paired Mac; null when none is paired.
+     */
+    fun selection(current: String?, lastUsed: String?, paired: List<String>, withShell: List<String>): String? = when {
+        current != null && current in paired -> current
+        lastUsed != null && lastUsed in paired -> lastUsed
+        else -> withShell.firstOrNull { it in paired } ?: paired.firstOrNull()
+    }
+
     /** The Mac to open on launch: the last used one if still paired, else the first. */
     fun reopen(lastUsed: String?, available: List<String>): String? =
         if (lastUsed != null && lastUsed in available) lastUsed else available.firstOrNull()

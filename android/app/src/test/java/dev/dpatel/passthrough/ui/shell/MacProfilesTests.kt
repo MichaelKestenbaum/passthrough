@@ -132,6 +132,17 @@ class MacProfilesTests {
         assertNull(MacProfiles.reopen("a", emptyList()))
     }
 
+    @Test fun selectionKeepsPairedMacWithoutShell() {
+        val paired = listOf("a", "net", "b")
+        val withShell = listOf("a", "b")
+        assertEquals("net", MacProfiles.selection("net", "a", paired, withShell))
+        // Unpaired current falls back to last used (even internet-only), then the first with a shell.
+        assertEquals("net", MacProfiles.selection("gone", "net", paired, withShell))
+        assertEquals("b", MacProfiles.selection("gone", "also-gone", listOf("net", "b"), withShell))
+        assertEquals("net", MacProfiles.selection(null, null, listOf("net"), emptyList()))
+        assertNull(MacProfiles.selection("gone", null, emptyList(), emptyList()))
+    }
+
     @Test fun watched() {
         val candidates = listOf("c1", "c2", "c3", "c4", "c5", "c6")
         val recency = mapOf("c3" to 30.0, "c2" to 20.0, "c5" to 15.0, "c4" to 10.0)

@@ -383,10 +383,15 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             relayToken = Runtime.registry::relayToken)
         val previous = _macs.value.firstOrNull { it.macID == clientMacID }
         _macs.value = built
-        if (built.none { it.macID == _selectedMacID.value }) {
-            _selectedMacID.value = MacProfiles.reopen(Runtime.settings.shellLastMac(), built.map { it.macID })
+        // A paired Mac stays selected even without a shell credential (internet only).
+        _selectedMacID.value = MacProfiles.selection(
+            _selectedMacID.value, Runtime.settings.shellLastMac(), loaded.clients.map { it.id }, built.map { it.macID },
+        )
+        val current = current() ?: run {
+            if (_selectedMacID.value == null) return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
+            updateWatcher()
+            return idleOnMacWithoutShell()
         }
-        val current = current() ?: return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
         // Before any dial below: a watch on the (newly) selected Mac ends first. Also covers
         // the paths that keep the live connection (a new pairing changes what is watched).
         updateWatcher()
@@ -479,6 +484,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val credential = current()
         if (credential == null) {
             stopRedialing()
+            if (_selectedMacID.value != null) return idleOnMacWithoutShell()
             if (_macs.value.isEmpty()) _reach.value = ShellReach.NO_ACCESS
             return
         }
@@ -902,6 +908,21 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     /** close() does the TLS close_notify, which may block: never on the main thread. */
     private fun closeQuietly(conn: ShellConnection) {
         viewModelScope.launch(Dispatchers.IO) { conn.close() }
+    }
+
+    /**
+     * The selected Mac is paired but has no shell credential (internet only): the same Mac change as
+     * [switchSessions] so nothing of the Mac left (sessions, tabs, state) shows or is saved under this
+     * one, and nothing to dial.
+     */
+    private fun idleOnMacWithoutShell() {
+        val mac = _selectedMacID.value ?: return
+        stopRedialing()
+        dropConnection()
+        if (clientMacID != mac) switchSessions(mac) else resetSessions()
+        clientMacID = mac
+        _lastError.value = null
+        _reach.value = ShellReach.NO_ACCESS
     }
 
     /**

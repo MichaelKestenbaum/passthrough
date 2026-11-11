@@ -30,6 +30,7 @@ final class MacActivityController {
     private var lastSnapshot = MacSnapshot.load()
     private var awaitingAwakeUntil: Date?
     private var lastSeen: Seen?
+    private var lastSelected: Seen?
 
     private var activity: Activity<MacActivityAttributes>? { Activity<MacActivityAttributes>.activities.first { $0.activityState != .ended && !endedIDs.contains($0.id) } }
     /// Activities an end was asked for that hasn't landed yet.
@@ -39,11 +40,29 @@ final class MacActivityController {
     var onActivityMacChange: ((String?) -> Void)? { didSet { announced(force: true) } }
 
     /// The Mac the running Live Activity belongs to (from its attributes, so it survives a relaunch).
-    var activityMacID: String? {
-        guard let activity else { return nil }
-        return activity.attributes.macID
+    var activityMacID: String? { activity.flatMap(macID(of:)) }
+
+    private static let adoptedKey = "PTActivityAdoptedMacs"
+    /// Mac IDs given to activities an older build started (no ID in their attributes, which can't change):
+    /// by activity ID, kept so a relaunch finds them again.
+    private var adopted: [String: String] = UserDefaults.standard.dictionary(forKey: adoptedKey) as? [String: String] ?? [:] {
+        didSet { UserDefaults.standard.set(adopted, forKey: Self.adoptedKey) }
     }
-    
+
+    private func macID(of activity: Activity<MacActivityAttributes>) -> String? {
+        activity.attributes.macID ?? adopted[activity.id]
+    }
+
+    /// An activity from before activities carried their Mac belongs to the Mac selected now,
+    /// the only one that build could have started it for.
+    func adoptUntagged(selectedMacID: String?) {
+        let live = Set(Activity<MacActivityAttributes>.activities.map(\.id))
+        if adopted.keys.contains(where: { !live.contains($0) }) { adopted = adopted.filter { live.contains($0.key) } }
+        guard let selectedMacID, let activity, activity.attributes.macID == nil, adopted[activity.id] == nil else { return }
+        adopted[activity.id] = selectedMacID
+        announced()
+    }
+
     private func announced(force: Bool = false) {
         let id = activityMacID
         guard force || id != announcedMac else { return }
@@ -65,7 +84,7 @@ final class MacActivityController {
     func keepAwakeAsked(_ seen: Seen) {
         guard seen.reachable, let state = seen.state else { return }
         // Keep awake on another Mac than the running activity's: it moves there.
-        if let running = activity, let id = running.attributes.macID, id != seen.macID {
+        if let running = activity, let id = macID(of: running), id != seen.macID {
             end(running, nil)
         }
         lastSeen = seen
@@ -95,12 +114,18 @@ final class MacActivityController {
     /// the widget: the activity's Mac while one runs, else the selected Mac
     /// (`selected`, nil while it is connecting). Switching Macs never ends it.
     func refresh(selected: Seen?, activity seen: Seen?) {
+        if let selected { lastSelected = selected }
         if let activity {
             guard let seen else { announced(); return }
             lastSeen = seen
             if seen.state?.awake == true { awaitingAwakeUntil = nil }
             update(activity, seen)
-            writeSnapshot(seen)
+            // Once it has ended the widget is back to the selected Mac.
+            if endedIDs.contains(activity.id) {
+                if let selected = selected ?? lastSelected { writeSnapshot(selected) }
+            } else {
+                writeSnapshot(seen)
+            }
         } else if let selected {
             lastSeen = selected
             writeSnapshot(selected)

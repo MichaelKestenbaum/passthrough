@@ -149,6 +149,7 @@ extension RootView {
         let shell = model.shell
         guard !shell.macs.isEmpty || !model.pairedClients.isEmpty else { return MacActivityController.shared.clear() }
         let controller = MacActivityController.shared
+        controller.adoptUntagged(selectedMacID: shell.selectedMacID)
         let selected: MacActivityController.Seen?
         switch shell.reach {
         case .ready: selected = seen(reachable: true)

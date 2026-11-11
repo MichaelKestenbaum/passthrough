@@ -82,6 +82,11 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     val selectedMacID: StateFlow<String?> = _selectedMacID.asStateFlow()
     private val _sessions = MutableStateFlow<List<ShellSessionInfo>>(emptyList())
     val sessions: StateFlow<List<ShellSessionInfo>> = _sessions.asStateFlow()
+    /** Finished sessions removed from this phone, per Mac (the Mac keeps listing them for a while). */
+    private var hiddenSessions = ShellHiddenSessions.stored(Runtime.settings.shellHiddenSessions())
+    private val _visibleSessions = MutableStateFlow<List<ShellSessionInfo>>(emptyList())
+    /** The selected Mac's sessions minus the finished ones removed here; what lists and badges show. */
+    val visibleSessions: StateFlow<List<ShellSessionInfo>> = _visibleSessions.asStateFlow()
     private val _history = MutableStateFlow<List<ShellHistoryEntry>>(emptyList())
     val history: StateFlow<List<ShellHistoryEntry>> = _history.asStateFlow()
     /** A history request is on its way to the Mac. */
@@ -524,7 +529,24 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ends a running session on the Mac, or just closes the tab of an ended one (the Mac would refuse to close it again). */
     fun close(id: String) {
-        if (!_ended.value.isEnded(id)) connection?.close(id)
+        if (_ended.value.isEnded(id) || _sessions.value.firstOrNull { it.id == id }?.running == false) return remove(id)
+        connection?.close(id)
+        _ended.value = _ended.value.forget(id)
+        shownTabs = _openTabs.value - id
+        if (_activeSession.value == id) shownActive = null
+    }
+
+    /**
+     * Removes a finished session from this phone: hides it for this Mac and
+     * drops its tab. Never sends `close` (the Mac ignores it for a session that
+     * has ended), so it works while the Mac is out of reach.
+     */
+    fun remove(id: String) {
+        (clientMacID ?: _selectedMacID.value)?.let {
+            hiddenSessions = hiddenSessions.hide(id, it)
+            saveHiddenSessions()
+            publishVisible()
+        }
         _ended.value = _ended.value.forget(id)
         shownTabs = _openTabs.value - id
         if (_activeSession.value == id) shownActive = null
@@ -646,6 +668,11 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             is ShellEvent.Sessions -> {
                 _sessions.value = event.sessions
                 val ids = event.sessions.map { it.id }.toSet()
+                (clientMacID ?: _selectedMacID.value)?.let {
+                    val applied = hiddenSessions.apply(ids.toList(), it)
+                    if (applied != hiddenSessions) { hiddenSessions = applied; saveHiddenSessions() }
+                }
+                publishVisible()
                 // The ended session on screen keeps its tab (and log) until the user closes it.
                 val kept = _activeSession.value?.takeIf { _ended.value.isEnded(it) }
                 _ended.value = _ended.value.apply(event.sessions, keeping = setOfNotNull(kept))
@@ -838,12 +865,27 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         Runtime.settings.setShellTabMemory(if (memory.byMac.isEmpty()) null else memory.toJson())
     }
 
+    private fun saveHiddenSessions() {
+        Runtime.settings.setShellHiddenSessions(if (hiddenSessions.byMac.isEmpty()) null else hiddenSessions.toJson())
+    }
+
+    private fun publishVisible() {
+        val mac = clientMacID ?: _selectedMacID.value
+        _visibleSessions.value = if (mac == null) _sessions.value else hiddenSessions.visible(_sessions.value, mac)
+    }
+
     /** Drops tab memory and the last-used Mac for Macs no longer paired. */
     private fun forgetUnpaired(paired: Set<String>) {
         val kept = _tabMemory.value.keepOnly(paired)
         if (kept != _tabMemory.value) {
             _tabMemory.value = kept
             saveTabMemory()
+        }
+        val keptHidden = hiddenSessions.keepOnly(paired)
+        if (keptHidden != hiddenSessions) {
+            hiddenSessions = keptHidden
+            saveHiddenSessions()
+            publishVisible()
         }
         if (Runtime.settings.shellLastMac()?.let { it !in paired } == true) Runtime.settings.setShellLastMac(null)
     }
@@ -867,6 +909,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         _timelineUnsupported.value = false
         timelineLoading = false
         _sessions.value = emptyList()
+        _visibleSessions.value = emptyList()
         _history.value = emptyList()
         shownTabs = emptyList()
         shownActive = null

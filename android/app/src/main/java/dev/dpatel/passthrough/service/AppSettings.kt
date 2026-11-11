@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
+import androidx.core.content.edit
 import dev.dpatel.passthrough.core.KeyValueStore
 import dev.dpatel.passthrough.core.PassthroughProtocol
 import dev.dpatel.passthrough.core.ShellConnectMode
@@ -64,6 +65,12 @@ class AppSettings(context: Context) {
         prefs.edit().apply { if (json == null) remove(SHELL_TAB_MEMORY) else putString(SHELL_TAB_MEMORY, json) }.apply()
     }
 
+    /** Finished sessions removed from this phone, per Mac (ShellHiddenSessions JSON); same key as the iOS app. */
+    fun shellHiddenSessions(): String? = prefs.getString(SHELL_HIDDEN_SESSIONS, null)
+    fun setShellHiddenSessions(json: String?) {
+        prefs.edit { if (json == null) remove(SHELL_HIDDEN_SESSIONS) else putString(SHELL_HIDDEN_SESSIONS, json) }
+    }
+
     /** The Mac the shell last showed, reopened on launch; same key as the iOS app. */
     fun shellLastMac(): String? = prefs.getString(SHELL_LAST_MAC, null)
     fun setShellLastMac(macID: String?) {
@@ -84,6 +91,7 @@ class AppSettings(context: Context) {
         const val CAPTURE_PROTECTION = "captureProtection"
         const val SHELL_TAB_MEMORY = "shell.tabMemory"
         const val SHELL_LAST_MAC = "shell.lastMac"
+        const val SHELL_HIDDEN_SESSIONS = "shell.hiddenSessions"
     }
 }
 

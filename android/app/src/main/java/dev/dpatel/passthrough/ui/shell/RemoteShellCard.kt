@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
@@ -83,7 +84,7 @@ fun RemoteShellCard(vm: ShellViewModel, onOpen: (String?) -> Unit, onHistory: ()
     val redialing by vm.redialing.collectAsStateWithLifecycle()
     val macs by vm.macs.collectAsStateWithLifecycle()
     val selected by vm.selectedMacID.collectAsStateWithLifecycle()
-    val sessions by vm.sessions.collectAsStateWithLifecycle()
+    val sessions by vm.visibleSessions.collectAsStateWithLifecycle()
     val lastError by vm.lastError.collectAsStateWithLifecycle()
     val path by vm.path.collectAsStateWithLifecycle()
     val fromAnywhere by vm.triedFromAnywhere.collectAsStateWithLifecycle()
@@ -209,19 +210,27 @@ private fun SessionRow(vm: ShellViewModel, session: ShellSessionInfo, nowMillis:
                 Text(ShellFormat.status(session, nowMillis / 1000.0), style = PT.display(12.sp, FontWeight.Normal), color = c.secondary)
             }
         }
-        // An ended session has nothing to end; the Mac keeps it listed for a while.
-        if (session.running) Box {
+        // A running session can be ended; a finished one the Mac keeps listing for a while can be removed here.
+        Box {
             IconButton(onClick = { menu = true }) {
                 Icon(Icons.Filled.MoreHoriz, "Options for ${session.title}", tint = c.secondary)
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("End session", color = PT.danger) },
-                    leadingIcon = { Icon(Icons.Filled.Close, null, tint = PT.danger) },
-                    onClick = { menu = false; vm.close(session.id) },
-                )
+                if (session.running) {
+                    DropdownMenuItem(
+                        text = { Text("End session", color = PT.danger) },
+                        leadingIcon = { Icon(Icons.Filled.Close, null, tint = PT.danger) },
+                        onClick = { menu = false; vm.close(session.id) },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("Remove", color = PT.danger) },
+                        leadingIcon = { Icon(Icons.Filled.Delete, null, tint = PT.danger) },
+                        onClick = { menu = false; vm.remove(session.id) },
+                    )
+                }
             }
-        } else Spacer(Modifier.size(48.dp))
+        }
     }
 }
 

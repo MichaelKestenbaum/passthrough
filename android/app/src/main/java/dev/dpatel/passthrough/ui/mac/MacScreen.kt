@@ -118,7 +118,7 @@ fun MacScreen(
     val reach by shell.reach.collectAsStateWithLifecycle()
     val macs by shell.macs.collectAsStateWithLifecycle()
     val selected by shell.selectedMacID.collectAsStateWithLifecycle()
-    val sessions by shell.sessions.collectAsStateWithLifecycle()
+    val sessions by shell.visibleSessions.collectAsStateWithLifecycle()
     val path by shell.path.collectAsStateWithLifecycle()
     val state by shell.macState.collectAsStateWithLifecycle()
     val pending by shell.pendingControl.collectAsStateWithLifecycle()

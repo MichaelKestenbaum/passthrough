@@ -40,6 +40,14 @@ class MacProfilesTests {
         assertEquals(MacTabMemory(), MacTabMemory.stored("{\"byMac\":42}"))
     }
 
+    @Test fun hiddenRoundTripsThroughJsonAndPrunesUnpaired() {
+        val hidden = ShellHiddenSessions().hide("s1", "m1").hide("s2", "m2")
+        assertEquals(hidden, ShellHiddenSessions.stored(hidden.toJson()))
+        assertEquals(setOf("m1"), hidden.keepOnly(setOf("m1")).byMac.keys)
+        assertTrue(ShellHiddenSessions.stored(null).byMac.isEmpty())
+        assertTrue(ShellHiddenSessions.stored("not json").byMac.isEmpty())
+    }
+
     @Test fun hiddenPrunedWhenNoLongerListed() {
         var hidden = ShellHiddenSessions()
         hidden = hidden.hide("s1", "m1")

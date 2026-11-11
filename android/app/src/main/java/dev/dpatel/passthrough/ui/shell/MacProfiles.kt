@@ -59,6 +59,17 @@ data class ShellHiddenSessions(val byMac: Map<String, Set<String>> = emptyMap())
     }
 
     fun forget(macID: String): ShellHiddenSessions = copy(byMac = byMac - macID)
+
+    /** Drops Macs no longer paired. */
+    fun keepOnly(macIDs: Set<String>): ShellHiddenSessions = copy(byMac = byMac.filterKeys { it in macIDs })
+
+    fun toJson(): String = Json.encodeToString(serializer(), this)
+
+    companion object {
+        /** What was stored, or nothing hidden when there is none or it can't be read. */
+        fun stored(json: String?): ShellHiddenSessions =
+            json?.let { runCatching { Json.decodeFromString(serializer(), it) }.getOrNull() } ?: ShellHiddenSessions()
+    }
 }
 
 /** What a Mac's row in the switcher says about it. */

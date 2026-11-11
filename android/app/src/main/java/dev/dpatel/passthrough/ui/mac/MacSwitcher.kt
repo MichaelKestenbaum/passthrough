@@ -162,7 +162,9 @@ fun MacSwitcherSheet(
                         // The session is read before the switch swaps the lists; the terminal opens after the sheet is gone.
                         val question = if (asking) askingSession(client.id) else null
                         shell.select(client.id)
-                        close { question?.let(onOpenTerminal) }
+                        val target = client.id
+                        // Only if that Mac is still the one selected once the sheet is gone.
+                        close { if (shell.selectedMacID.value == target) question?.let(onOpenTerminal) }
                     }
                 }
             }

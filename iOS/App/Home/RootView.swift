@@ -118,14 +118,19 @@ extension RootView {
         guard lock.isUnlocked, let link = links.pending else { return }
         let shell = model.shell
         switch link {
-        case .mac(let macID):
-            selectLinked(macID)
+        case .mac:
+            selectLinked(link)
             tab = .mac
             router.showThisPhone = false
             links.done()
-        case .session(let id, let macID):
+        case .session(let id, _):
             // The Mac first: its tabs come back, and the terminal's tab is kept as that Mac's.
-            selectLinked(macID)
+            // A Mac no longer paired: nothing to attach on any other; just the Mac tab.
+            guard selectLinked(link) else {
+                tab = .mac
+                router.showThisPhone = false
+                return links.done()
+            }
             router.terminal = .attach(id)
             links.done()
         case .keepAwake, .vpnOn:
@@ -145,11 +150,19 @@ extension RootView {
         }
     }
 
-    /// A link from a Live Activity or widget names the Mac it shows: switch to it
-    /// (if still paired). Without one (an older link), the Mac selected now.
-    private func selectLinked(_ macID: String?) {
-        guard let macID, model.pairedClients.contains(where: { $0.id == macID }) else { return }
-        model.shell.select(macID)
+    /// A link from a Live Activity or widget names the Mac it shows: switch to it.
+    /// Without one (an older link), a session link belongs to the running
+    /// activity's Mac (tagged or adopted), else the Mac selected now. False when
+    /// it names a Mac that isn't paired: nothing should be opened.
+    @discardableResult
+    private func selectLinked(_ link: AppLink) -> Bool {
+        let target = link.target(activityMac: MacActivityController.shared.activityMacID,
+                                 paired: model.pairedClients.map(\.id))
+        switch target {
+        case .current: return true
+        case .mac(let macID): model.shell.select(macID); return true
+        case .rejected: return false
+        }
     }
 
     /// The Live Activity and the widget show what the app last saw. Locked or

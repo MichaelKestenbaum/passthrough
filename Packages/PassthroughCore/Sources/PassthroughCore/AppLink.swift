@@ -35,6 +35,30 @@ public enum AppLink: Equatable, Sendable {
         return components.url!
     }
 
+    /// Which Mac a link is carried out on.
+    public enum Target: Equatable, Sendable {
+        /// The Mac selected now.
+        case current
+        /// Switch to this paired Mac first.
+        case mac(String)
+        /// It names a Mac that isn't paired: nothing is attached; land on the Mac tab.
+        case rejected
+    }
+
+    /// Where to carry this link out. A named Mac must be in `paired`. A session link
+    /// without one (from a Live Activity an older build started, which can't carry
+    /// its Mac) belongs to the running activity's Mac, `activityMac` (tagged or
+    /// adopted), when that is paired; any other link without one means the Mac selected now.
+    public func target(activityMac: String?, paired: [String]) -> Target {
+        switch self {
+        case .keepAwake, .vpnOn: return .current
+        case .mac(let macID), .session(_, let macID):
+            if let macID { return paired.contains(macID) ? .mac(macID) : .rejected }
+            if case .session = self, let activityMac, paired.contains(activityMac) { return .mac(activityMac) }
+            return .current
+        }
+    }
+
     public init?(url: URL) {
         guard url.scheme == Self.scheme, let host = url.host() else { return nil }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []

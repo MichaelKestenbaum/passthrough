@@ -27,6 +27,24 @@ final class AppLinkTests: XCTestCase {
         XCTAssertEqual(AppLink(url: URL(string: "passthrough://mac?x=1&mac=m1")!), .mac("m1"))
     }
 
+    func testTarget() {
+        let id = UUID().uuidString
+        let paired = ["a", "b"]
+        // A named Mac: switch to it if paired, else nothing is attached.
+        XCTAssertEqual(AppLink.session(id, mac: "a").target(activityMac: "b", paired: paired), .mac("a"))
+        XCTAssertEqual(AppLink.mac("b").target(activityMac: nil, paired: paired), .mac("b"))
+        XCTAssertEqual(AppLink.session(id, mac: "gone").target(activityMac: "a", paired: paired), .rejected)
+        XCTAssertEqual(AppLink.mac("gone").target(activityMac: nil, paired: paired), .rejected)
+        // An unqualified session link (older activity): the running activity's Mac, tagged or adopted.
+        XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: "a", paired: paired), .mac("a"))
+        XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: "gone", paired: paired), .current)
+        XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: nil, paired: paired), .current)
+        // Other unqualified links: the Mac selected now.
+        XCTAssertEqual(AppLink.mac(nil).target(activityMac: "a", paired: paired), .current)
+        XCTAssertEqual(AppLink.keepAwake.target(activityMac: "a", paired: paired), .current)
+        XCTAssertEqual(AppLink.vpnOn.target(activityMac: nil, paired: []), .current)
+    }
+
     /// Nothing lowers protection from a link: there is no VPN-off or sleep link to forge.
     func testOnlyOurLinks() {
         let long = String(repeating: "a", count: 65)

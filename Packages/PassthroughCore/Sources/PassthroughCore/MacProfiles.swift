@@ -118,7 +118,9 @@ public enum MacProfiles {
 
     /// The Macs whose sessions to watch besides the selected one: every pinned
     /// Mac, then up to `limit` of the rest, most recently used first (ties keep
-    /// candidate order).
+    /// candidate order). Pinned IDs count only when they are also in
+    /// `candidates`: those are the Macs with a usable shell credential, and a
+    /// Mac without one can't be dialed, so a stale pin is ignored.
     public static func watched(candidates: [String], selected: String?, recency: [String: Double],
                                pinned: Set<String>, limit: Int = 4) -> [String] {
         let others = candidates.filter { $0 != selected }

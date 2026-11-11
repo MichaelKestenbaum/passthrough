@@ -99,4 +99,9 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertEqual(MacProfiles.watched(candidates: candidates, selected: "c6", recency: [:], pinned: ["c6"], limit: 2),
                        ["c1", "c2"])
     }
+
+    func testWatchedIgnoresPinnedNotInCandidates() {
+        XCTAssertEqual(MacProfiles.watched(candidates: ["c1", "c2", "c3"], selected: "c1", recency: ["c3": 2, "c2": 1], pinned: ["gone"]),
+                       ["c3", "c2"])
+    }
 }

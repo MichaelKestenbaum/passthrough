@@ -54,6 +54,11 @@ public struct ShellHiddenSessions: Codable, Equatable, Sendable {
     }
 
     public mutating func forget(_ macID: String) { byMac[macID] = nil }
+
+    /// Only a finished session can be removed: known ended, or listed as not running. A running or unknown one can't.
+    public func canRemove(_ id: String, ended: ShellEndedSessions, sessions: [ShellSessionInfo]) -> Bool {
+        ended.isEnded(id) || sessions.first(where: { $0.id == id })?.running == false
+    }
 }
 
 /// What the last key read learned about each Mac that granted the shell: which

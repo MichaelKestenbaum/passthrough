@@ -536,7 +536,7 @@ final class ShellModel: ObservableObject {
     /// Ends a running session, or just closes the tab of an ended one (the
     /// Mac would refuse to close it again).
     func close(_ id: String) {
-        if ended.isEnded(id) || sessions.first(where: { $0.id == id })?.running == false { return remove(id) }
+        if hiddenSessions.canRemove(id, ended: ended, sessions: sessions) { return remove(id) }
         client?.close(id)
         ended.forget(id)
         openTabs.removeAll { $0 == id }
@@ -547,6 +547,7 @@ final class ShellModel: ObservableObject {
     /// drops its tab. Never sends `close` (the Mac ignores it for a session
     /// that has ended), so it works while the Mac is out of reach.
     func remove(_ id: String) {
+        guard hiddenSessions.canRemove(id, ended: ended, sessions: sessions) else { return }
         if let mac = clientMacID ?? selectedMacID {
             hiddenSessions.hide(id, on: mac)
             saveHiddenSessions()

@@ -42,6 +42,17 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertTrue(hidden.byMac.isEmpty)
     }
 
+    func testOnlyFinishedSessionsCanBeRemoved() {
+        let hidden = ShellHiddenSessions()
+        let list = [info("run"), info("done", running: false)]
+        var ended = ShellEndedSessions()
+        XCTAssertTrue(hidden.canRemove("done", ended: ended, sessions: list))
+        XCTAssertFalse(hidden.canRemove("run", ended: ended, sessions: list))
+        XCTAssertFalse(hidden.canRemove("unknown", ended: ended, sessions: list))
+        ended.ended("gone", exitStatus: 0)
+        XCTAssertTrue(hidden.canRemove("gone", ended: ended, sessions: list))
+    }
+
     func testSelectionKeepsPairedMacWithoutShell() {
         let paired = ["a", "net", "b"]
         let withShell = ["a", "b"]

@@ -110,4 +110,40 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertEqual(MacProfiles.watched(candidates: ["c1", "c2", "c3"], selected: "c1", recency: ["c3": 2, "c2": 1], pinned: ["gone"]),
                        ["c3", "c2"])
     }
+    func testRecencyTakesTheLaterOfHeardAndSelected() {
+        XCTAssertEqual(MacProfiles.recency(lastHeard: ["a": 10, "b": 50], lastSelected: ["a": 40, "c": 5]),
+                       ["a": 40, "b": 50, "c": 5])
+    }
+
+    private func credential(_ id: String, key: UInt8 = 1, addresses: [String] = ["10.0.0.1"]) -> ShellCredential {
+        ShellCredential(macID: id, macName: id, certSHA256: "cert", shellKey: Data([key]), phoneID: "phone", port: 7, addresses: addresses)
+    }
+
+    func testWatchChanges() {
+        let a = credential("a"), b = credential("b"), c = credential("c")
+        // Nothing running: dial everything wanted, in order.
+        var changes = MacProfiles.watchChanges(running: [:], wanted: [b, a])
+        XCTAssertEqual(changes.stop, [])
+        XCTAssertEqual(changes.start.map(\.macID), ["b", "a"])
+        // Same set: nothing to do.
+        changes = MacProfiles.watchChanges(running: ["a": a, "b": b], wanted: [a, b])
+        XCTAssertEqual(changes.stop, [])
+        XCTAssertEqual(changes.start, [])
+        // b no longer watched, c new.
+        changes = MacProfiles.watchChanges(running: ["a": a, "b": b], wanted: [a, c])
+        XCTAssertEqual(changes.stop, ["b"])
+        XCTAssertEqual(changes.start.map(\.macID), ["c"])
+        // a's key or addresses changed: redial it.
+        let newKey = credential("a", key: 2), moved = credential("a", addresses: ["10.0.0.2"])
+        changes = MacProfiles.watchChanges(running: ["a": a], wanted: [newKey])
+        XCTAssertEqual(changes.stop, ["a"])
+        XCTAssertEqual(changes.start, [newKey])
+        changes = MacProfiles.watchChanges(running: ["a": a], wanted: [moved])
+        XCTAssertEqual(changes.stop, ["a"])
+        XCTAssertEqual(changes.start, [moved])
+        // Nothing wanted: stop all.
+        changes = MacProfiles.watchChanges(running: ["a": a, "b": b], wanted: [])
+        XCTAssertEqual(changes.stop, ["a", "b"])
+        XCTAssertEqual(changes.start, [])
+    }
 }

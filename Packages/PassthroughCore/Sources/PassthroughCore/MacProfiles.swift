@@ -132,4 +132,21 @@ public enum MacProfiles {
             .map(\.element)
         return pinnedFirst + rest
     }
+    /// How recently each Mac was used, for `watched`: the later of when it
+    /// last answered and when it was last selected (seconds since 1970).
+    public static func recency(lastHeard: [String: Double], lastSelected: [String: Double]) -> [String: Double] {
+        lastHeard.merging(lastSelected, uniquingKeysWith: max)
+    }
+
+    /// Which watch connections to end and which to dial so the running set
+    /// becomes `wanted`: a Mac no longer wanted, or whose credential changed
+    /// (a new key or address), is stopped; a wanted Mac not running, or
+    /// stopped for a change, is started. `start` keeps `wanted`'s order.
+    public static func watchChanges(running: [String: ShellCredential],
+                                    wanted: [ShellCredential]) -> (stop: Set<String>, start: [ShellCredential]) {
+        let wantedByID = Dictionary(wanted.map { ($0.macID, $0) }, uniquingKeysWith: { a, _ in a })
+        let stop = Set(running.filter { id, credential in wantedByID[id] != credential }.keys)
+        let start = wanted.filter { running[$0.macID] == nil || stop.contains($0.macID) }
+        return (stop, start)
+    }
 }

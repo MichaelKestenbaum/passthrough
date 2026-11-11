@@ -49,9 +49,7 @@ final class ShellModel: ObservableObject {
             if reach != .connecting && reach != .ready { openWhenReady = false }
             // Remember when each Mac last answered, for "last heard" while it can't be reached.
             guard reach == .ready || oldValue == .ready, let mac = clientMacID else { return }
-            var heard = Self.lastHeardStore
-            heard[mac] = Date().timeIntervalSince1970
-            UserDefaults.standard.set(heard, forKey: Self.lastHeardKey)
+            Self.noteHeard(mac)
         }
     }
     @Published private(set) var sessions: [ShellSessionInfo] = []
@@ -102,8 +100,13 @@ final class ShellModel: ObservableObject {
             guard connectMode != oldValue else { return }
             UserDefaults.standard.set(connectMode.rawValue, forKey: Self.connectModeKey)
             if !macs.isEmpty { connect() }
+            updateWatcher()
         }
     }
+    /// The other paired Macs' sessions and state, while the app is in the foreground.
+    let watcher = MacWatcher()
+    /// Macs watched whatever the cap (the Live Activity's Mac); set by Task 7's wiring.
+    private var watchPinned: Set<String> = []
     /// Output for `(session, bytes)`, for the terminal views.
     let output = PassthroughSubject<(String, Data), Never>()
     /// A session's output is about to start over: sent before an attach request
@@ -118,6 +121,8 @@ final class ShellModel: ObservableObject {
     private static let tabMemoryKey = "shell.tabMemory"
     private static let lastMacKey = "shell.lastMac"
     private static let hiddenSessionsKey = "shell.hiddenSessions"
+    /// When each Mac was last selected (seconds since 1970), for which Macs to watch.
+    private static let lastSelectedKey = "shell.lastSelectedAt"
 
     private var client: ShellClient?
     private var clientMacID: String?
@@ -164,6 +169,7 @@ final class ShellModel: ObservableObject {
     private var pendingTranscript: (id: String, token: UUID, replay: ShellReplay.Collector,
                                     continuation: CheckedContinuation<[ShellReplayChunk]?, Never>)?
     private var observers: [NSObjectProtocol] = []
+    private var watcherChanges: AnyCancellable?
 
     init() {
         connectMode = UserDefaults.standard.string(forKey: Self.connectModeKey).flatMap(ShellConnectMode.init(rawValue:)) ?? .automatic
@@ -173,8 +179,19 @@ final class ShellModel: ObservableObject {
             .flatMap { try? JSONDecoder().decode(ShellHiddenSessions.self, from: $0) } ?? ShellHiddenSessions()
         // Sockets don't survive suspension; leave cleanly, and `refresh` on return reconnects.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dropConnection() }
+            MainActor.assumeIsolated {
+                self?.dropConnection()
+                self?.watcher.stop()
+            }
         })
+        watcher.hiddenSessions = { [weak self] in self?.hiddenSessions ?? ShellHiddenSessions() }
+        watcher.discovered = { [weak self] credential in
+            guard let self else { return nil }
+            return ShellCredentials.discovered(among: self.browseResults, macName: credential.macName, shellMacCount: self.macs.count)
+        }
+        watcher.recency = { MacProfiles.recency(lastHeard: Self.lastHeardStore, lastSelected: Self.lastSelectedStore) }
+        // Views watch this model: pass on what the watched Macs say.
+        watcherChanges = watcher.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     // MARK: Credentials
@@ -235,6 +252,7 @@ final class ShellModel: ObservableObject {
             return clear(anyLocked || !granting.isEmpty ? .keyUnavailable : .noAccess)
         }
         startBrowsing()
+        updateWatcher()
         // Keep a live connection to the same Mac with the same key: a `macInfo`
         // only changed how to dial it next time. Otherwise dial again.
         if client != nil, clientMacID == current.macID, let previous {
@@ -274,8 +292,49 @@ final class ShellModel: ObservableObject {
     }
 
     private static let lastHeardKey = "PTShellLastHeard"
-    private static var lastHeardStore: [String: Double] {
+    /// When each Mac last answered (seconds since 1970), on the live connection or a watch.
+    static var lastHeardStore: [String: Double] {
         UserDefaults.standard.dictionary(forKey: lastHeardKey) as? [String: Double] ?? [:]
+    }
+
+    static func noteHeard(_ macID: String, at date: Date = Date()) {
+        var heard = lastHeardStore
+        heard[macID] = date.timeIntervalSince1970
+        UserDefaults.standard.set(heard, forKey: lastHeardKey)
+    }
+
+    private static var lastSelectedStore: [String: Double] {
+        UserDefaults.standard.dictionary(forKey: lastSelectedKey) as? [String: Double] ?? [:]
+    }
+
+    /// What a Mac's row in the switcher says: the selected Mac from the live
+    /// connection, the others from their watch (or when last heard).
+    func status(for macID: String) -> MacStatus {
+        let hasShell = macs.contains { $0.macID == macID }
+        if macID == selectedMacID {
+            return MacProfiles.status(sessions: visibleSessions, reachable: reach == .ready, lastHeard: lastHeard, hasShell: hasShell)
+        }
+        let seen = watcher.seen[macID]
+        let heard = seen?.lastHeard ?? Self.lastHeardStore[macID].map(Date.init(timeIntervalSince1970:))
+        return MacProfiles.status(sessions: seen?.sessions, reachable: seen?.reachable ?? false, lastHeard: heard, hasShell: hasShell)
+    }
+
+    /// A session on a Mac other than the selected one is waiting on a question.
+    var otherMacNeedsYou: Bool {
+        macs.contains { mac in
+            guard mac.macID != selectedMacID, case .asking = status(for: mac.macID) else { return false }
+            return true
+        }
+    }
+
+    /// Starts or ends watches to match the paired Macs and the selection.
+    /// Not while in the background: watches are foreground only.
+    private func updateWatcher() {
+        #if DEBUG
+        if Self.demoState != nil { return applyDemoWatch() }
+        #endif
+        guard UIApplication.shared.applicationState != .background, lock?.isUnlocked == true else { return watcher.stop() }
+        watcher.update(credentials: macs, selected: selectedMacID, pinned: watchPinned, connectMode: connectMode)
     }
 
     /// Connecting again by itself after a working connection dropped.
@@ -305,7 +364,11 @@ final class ShellModel: ObservableObject {
         if let current = clientMacID { tabMemory.save(MacTabs(openTabs: openTabs, active: activeSession), for: current) }
         saveTabMemory()
         UserDefaults.standard.set(macID, forKey: Self.lastMacKey)
+        var selectedAt = Self.lastSelectedStore
+        selectedAt[macID] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(selectedAt, forKey: Self.lastSelectedKey)
         selectedMacID = macID
+        updateWatcher()
     }
 
     /// The phone forgot this Mac: drop its key, address, tabs and any connection to it.
@@ -322,6 +385,10 @@ final class ShellModel: ObservableObject {
         var heard = Self.lastHeardStore
         heard[macID] = nil
         UserDefaults.standard.set(heard, forKey: Self.lastHeardKey)
+        var selectedAt = Self.lastSelectedStore
+        selectedAt[macID] = nil
+        UserDefaults.standard.set(selectedAt, forKey: Self.lastSelectedKey)
+        if !macs.isEmpty { updateWatcher() }
         tabMemory.forget(macID)
         saveTabMemory()
         hiddenSessions.apply(listed: [], on: macID)
@@ -339,6 +406,7 @@ final class ShellModel: ObservableObject {
         granted = [:]
         clear(.noAccess)
         UserDefaults.standard.removeObject(forKey: Self.lastHeardKey)
+        UserDefaults.standard.removeObject(forKey: Self.lastSelectedKey)
         tabMemory = MacTabMemory()
         UserDefaults.standard.removeObject(forKey: Self.tabMemoryKey)
         UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
@@ -786,6 +854,7 @@ final class ShellModel: ObservableObject {
         redialTask = nil
         redialsMade = nil
         dropConnection()
+        watcher.stop()
         // Browsing exposes nothing secret: keep it across relocks so results are ready on unlock.
         if reach == .noAccess { stopBrowsing() }
         applyingRefresh = true
@@ -955,6 +1024,21 @@ extension ShellModel {
             ]
             historyLoaded = true
         }
+        applyDemoWatch()
+    }
+
+    /// The other demo Macs as a watch would see them (the second one's
+    /// `codex` session is asking), without dialling anything.
+    fileprivate func applyDemoWatch() {
+        guard Self.demoState == "ready" else { return watcher.demoShow([:]) }
+        let now = Date().timeIntervalSince1970
+        let ids = MacProfiles.watched(candidates: macs.map(\.macID), selected: selectedMacID,
+                                      recency: [:], pinned: watchPinned, limit: MacWatcher.limit)
+        watcher.demoShow(Dictionary(uniqueKeysWithValues: ids.map { id in
+            (id, MacWatcher.Seen(sessions: Self.demoSessions[id] ?? Self.demoBaseSessions(id, now: now),
+                                 state: MacState(awake: true, battery: 0.9, charging: true, control: true),
+                                 reachable: true, lastHeard: Date(timeIntervalSince1970: now)))
+        }))
     }
 
     fileprivate func demoTimeline(since: Date) {

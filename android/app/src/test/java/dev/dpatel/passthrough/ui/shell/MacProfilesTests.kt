@@ -70,7 +70,8 @@ class MacProfilesTests {
         assertEquals("Connected · 1 shell open", MacProfiles.statusText(MacStatus.Connected(1), now))
         assertEquals("Connected · 3 shells open", MacProfiles.statusText(MacStatus.Connected(3), now))
         assertEquals("claude is asking a question", MacProfiles.statusText(MacStatus.Asking("claude", "Edit?"), now))
-        assertTrue(MacProfiles.statusText(MacStatus.LastHeard(now - 7_200_000L), now).startsWith("Last heard "))
+        val fake = { then: Long, at: Long -> "fake(${at - then})" }
+        assertEquals("Last heard fake(7200000)", MacProfiles.statusText(MacStatus.LastHeard(now - 7_200_000L), now, fake))
         assertEquals("Paired, no Remote shell", MacProfiles.statusText(MacStatus.NoShell, now))
         assertEquals("Connecting…", MacProfiles.statusText(MacStatus.Connecting, now))
     }
@@ -80,6 +81,14 @@ class MacProfilesTests {
         assertEquals("M", MacProfiles.initial("  mini"))
         assertEquals("?", MacProfiles.initial(""))
         assertEquals("?", MacProfiles.initial("   "))
+    }
+
+    @Test fun initialIsTheFirstGraphemeUppercased() {
+        // Precomposed and decomposed é both give one cluster, uppercased.
+        assertEquals("É", MacProfiles.initial("été mac"))
+        assertEquals("É", MacProfiles.initial("étude"))
+        // A ZWJ emoji sequence is one grapheme: the whole family/person glyph stays.
+        assertEquals("👩‍💻", MacProfiles.initial("👩‍💻 Studio"))
     }
 
     /** Hard-coded: the Swift original asserts the same numbers. */

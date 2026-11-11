@@ -74,6 +74,12 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertEqual(MacProfiles.initial("   "), "?")
     }
 
+    func testInitialIsTheFirstGraphemeUppercased() {
+        XCTAssertEqual(MacProfiles.initial("\u{E9}t\u{E9} mac"), "\u{C9}")
+        XCTAssertEqual(MacProfiles.initial("e\u{301}tude"), "E\u{301}")
+        XCTAssertEqual(MacProfiles.initial("\u{1F469}\u{200D}\u{1F4BB} Studio"), "\u{1F469}\u{200D}\u{1F4BB}")
+    }
+
     /// Hard-coded: the Kotlin port asserts the same numbers.
     func testColorIndexVectors() {
         XCTAssertEqual(MacProfiles.colorIndex(macID: "mac-A", paletteCount: 6), 4)

@@ -1,7 +1,9 @@
 package dev.dpatel.passthrough.ui.shell
 
+import android.text.format.DateUtils
 import dev.dpatel.passthrough.core.ShellSessionInfo
 import dev.dpatel.passthrough.core.isAsking
+import java.text.BreakIterator
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -78,43 +80,34 @@ object MacProfiles {
         return MacStatus.Connecting
     }
 
-    fun statusText(status: MacStatus, nowMillis: Long): String = when (status) {
+    /**
+     * [relative] renders a past time against now; production uses Android's
+     * DateUtils (localized, like Swift's RelativeDateTimeFormatter). Injected so
+     * this stays testable on the JVM, where DateUtils returns null.
+     */
+    fun statusText(
+        status: MacStatus,
+        nowMillis: Long,
+        relative: (thenMillis: Long, nowMillis: Long) -> String = ::androidRelative,
+    ): String = when (status) {
         is MacStatus.Connected -> when (status.shells) {
             0 -> "Connected"
             1 -> "Connected · 1 shell open"
             else -> "Connected · ${status.shells} shells open"
         }
         is MacStatus.Asking -> "${status.title} is asking a question"
-        is MacStatus.LastHeard -> "Last heard ${relative(status.millis, nowMillis)}"
+        is MacStatus.LastHeard -> "Last heard " + relative(status.millis, nowMillis)
         MacStatus.NoShell -> "Paired, no Remote shell"
         MacStatus.Connecting -> "Connecting…"
     }
 
-    /**
-     * English relative time, approximating RelativeDateTimeFormatter's named style
-     * (Swift) without Android types. Future times read as "now".
-     */
-    private fun relative(then: Long, now: Long): String {
-        val seconds = (now - then) / 1000
-        val minutes = seconds / 60
-        val hours = minutes / 60
-        val days = hours / 24
-        return when {
-            seconds < 60 -> "now"
-            minutes < 60 -> plural(minutes, "minute") + " ago"
-            hours < 24 -> plural(hours, "hour") + " ago"
-            days == 1L -> "yesterday"
-            else -> plural(days, "day") + " ago"
-        }
-    }
-
-    private fun plural(count: Long, unit: String): String = if (count == 1L) "1 $unit" else "$count ${unit}s"
-
-    /** The avatar letter: the name's first letter, uppercased; "?" without one. */
+    /** The avatar letter: the name's first grapheme cluster, uppercased; "?" without one. */
     fun initial(macName: String): String {
         val trimmed = macName.trim()
         if (trimmed.isEmpty()) return "?"
-        return String(Character.toChars(trimmed.codePointAt(0))).uppercase()
+        val boundaries = BreakIterator.getCharacterInstance()
+        boundaries.setText(trimmed)
+        return trimmed.substring(0, boundaries.next()).uppercase()
     }
 
     /**
@@ -155,3 +148,7 @@ object MacProfiles {
         return pinnedFirst + rest
     }
 }
+
+/** Production relative time: Android's localized phrase, e.g. "2 hours ago". */
+private fun androidRelative(thenMillis: Long, nowMillis: Long): String =
+    DateUtils.getRelativeTimeSpanString(thenMillis, nowMillis, DateUtils.MINUTE_IN_MILLIS).toString()

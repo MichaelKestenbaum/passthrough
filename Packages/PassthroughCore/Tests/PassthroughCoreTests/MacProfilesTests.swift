@@ -181,4 +181,20 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertEqual(changes.stop, ["a", "b"])
         XCTAssertEqual(changes.start, [])
     }
+
+    func testAdoptedMacPrefersUniqueNameMatch() {
+        let paired = [(id: "a", name: "Studio"), (id: "b", name: "Laptop")]
+        XCTAssertEqual(MacProfiles.adoptedMac(activityMacName: "Laptop", paired: paired, selected: "a"), "b")
+    }
+
+    func testAdoptedMacDuplicateNamesFallBackToSelected() {
+        let paired = [(id: "a", name: "Mac"), (id: "b", name: "Mac")]
+        XCTAssertEqual(MacProfiles.adoptedMac(activityMacName: "Mac", paired: paired, selected: "b"), "b")
+    }
+
+    func testAdoptedMacNoMatchFallsBackToSelected() {
+        let paired = [(id: "a", name: "Studio")]
+        XCTAssertEqual(MacProfiles.adoptedMac(activityMacName: "Gone", paired: paired, selected: "a"), "a")
+        XCTAssertNil(MacProfiles.adoptedMac(activityMacName: "Gone", paired: paired, selected: nil))
+    }
 }

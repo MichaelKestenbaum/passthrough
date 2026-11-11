@@ -55,13 +55,15 @@ final class MacActivityController {
         activity.attributes.macID ?? adopted[activity.id]
     }
 
-    /// An activity from before activities carried their Mac belongs to the Mac selected now,
-    /// the only one that build could have started it for.
-    func adoptUntagged(selectedMacID: String?) {
+    /// An activity from before activities carried their Mac belongs to the paired Mac with its name,
+    /// else to the Mac selected now (the only one that build could have started it for).
+    func adoptUntagged(selectedMacID: String?, paired: [(id: String, name: String)]) {
         let live = Set(Activity<MacActivityAttributes>.activities.map(\.id))
         if adopted.keys.contains(where: { !live.contains($0) }) { adopted = adopted.filter { live.contains($0.key) } }
-        guard let selectedMacID, let activity, activity.attributes.macID == nil, adopted[activity.id] == nil else { return }
-        adopted[activity.id] = selectedMacID
+        guard let activity, activity.attributes.macID == nil, adopted[activity.id] == nil,
+              let mac = MacProfiles.adoptedMac(activityMacName: activity.attributes.macName, paired: paired,
+                                               selected: selectedMacID) else { return }
+        adopted[activity.id] = mac
         announced()
     }
 

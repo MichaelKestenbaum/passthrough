@@ -173,6 +173,15 @@ public enum MacProfiles {
         lastHeard.merging(lastSelected, uniquingKeysWith: max)
     }
 
+    /// The Mac an activity with no Mac ID (started by an older build) belongs to:
+    /// the one paired Mac with the activity's Mac name, else (none, or several
+    /// share it) the selected Mac, the only one that build could have used.
+    public static func adoptedMac(activityMacName: String, paired: [(id: String, name: String)],
+                                  selected: String?) -> String? {
+        let named = paired.filter { $0.name == activityMacName }
+        return named.count == 1 ? named[0].id : selected
+    }
+
     /// Which watch connections to end and which to dial so the running set
     /// becomes `wanted`: a Mac no longer wanted, or whose credential changed
     /// (a new key or address), is stopped; a wanted Mac not running, or

@@ -165,6 +165,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     private var lock: AppLock? = null
     /** Keys read from the vault since the last unlock, by Mac. */
     private var keys: Map<String, ByteArray> = emptyMap()
+    /** What the last refresh learned about keys it couldn't use; read when [connect] selects a Mac without a credential. */
+    private var keyFacts = ShellKeyFacts()
     private var connection: ShellConnection? = null
     private var connectJob: Job? = null
     private var clientMacID: String? = null
@@ -307,10 +309,11 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val clients: List<PairedClient>,
         val phoneID: String,
         val keys: Map<String, ByteArray>,
-        val anyLocked: Boolean,
-        val keyLost: Boolean,
+        val facts: ShellKeyFacts,
         val deviceSecure: Boolean,
-    )
+    ) {
+        val anyLocked: Boolean get() = facts.anyLocked
+    }
 
     private suspend fun runRefresh() {
         val lock = lock ?: return
@@ -331,14 +334,14 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val clients = registry.clients
         val granting = clients.filter { it.shell != null }
         if (!vault.supported || !vault.deviceSecure || granting.isEmpty()) {
-            return Loaded(clients, "", emptyMap(), anyLocked = false, keyLost = false, deviceSecure = vault.deviceSecure)
+            return Loaded(clients, "", emptyMap(), ShellKeyFacts(granting.map { it.id }.toSet()), deviceSecure = vault.deviceSecure)
         }
         vault.migrateLegacyLost(registry)
-        var anyLocked = false
+        val locked = HashSet<String>()
         val pending = granting.filter { registry.sealedPendingShellKey(it.id) != null }.map { it.id }.toSet()
         if (pending.isNotEmpty()) {
             vault.adoptPending(registry)
-            if (vault.status.value == ShellKeyStatus.LOCKED) anyLocked = true
+            if (vault.status.value == ShellKeyStatus.LOCKED) locked += pending
         }
         vault.prune(clients.map { it.id }.toSet())
         val keys = HashMap<String, ByteArray>()
@@ -350,13 +353,14 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             }
             when (val read = vault.read(client.id)) {
                 is ShellKeyVault.Read.Key -> keys[client.id] = read.bytes
-                ShellKeyVault.Read.Locked -> anyLocked = true
+                ShellKeyVault.Read.Locked -> locked += client.id
                 ShellKeyVault.Read.Missing, ShellKeyVault.Read.Unavailable -> Unit
             }
         }
         // Per Mac: a Mac that granted again since the vault lost its key is not lost.
-        val keyLost = granting.any { it.id !in keys && vault.isLost(it.id) }
-        return Loaded(clients, registry.phoneID, keys, anyLocked, keyLost, deviceSecure = true)
+        val lost = granting.filter { it.id !in keys && vault.isLost(it.id) }.map { it.id }.toSet()
+        val facts = ShellKeyFacts(granting.map { it.id }.toSet(), locked, lost)
+        return Loaded(clients, registry.phoneID, keys, facts, deviceSecure = true)
     }
 
     private fun applyLoaded(loaded: Loaded, lock: AppLock) {
@@ -379,6 +383,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             relockRequested = false
         }
         keys = loaded.keys
+        keyFacts = loaded.facts
         val built = ShellCredentials.build(granting, loaded.phoneID, key = { keys[it] }, manualAddress = Runtime.settings::shellManualAddress,
             relayToken = Runtime.registry::relayToken)
         val previous = _macs.value.firstOrNull { it.macID == clientMacID }
@@ -389,12 +394,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         )
         val current = current() ?: run {
             val mac = _selectedMacID.value
-            if (mac == null) return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
+            if (mac == null) return clear(loaded.facts.reachWithoutCredential(null))
             updateWatcher()
             // A grant whose key can't be read keeps its recovery state; a Mac with no grant is internet only.
-            return idleOnMacWithoutShell(
-                ShellReach.withoutCredential(loaded.clients.any { it.id == mac && it.shell != null }, loaded.anyLocked, loaded.keyLost),
-            )
+            return idleOnMacWithoutShell(loaded.facts.reachWithoutCredential(mac))
         }
         // Before any dial below: a watch on the (newly) selected Mac ends first. Also covers
         // the paths that keep the live connection (a new pairing changes what is watched).
@@ -488,10 +491,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val credential = current()
         if (credential == null) {
             stopRedialing()
-            _selectedMacID.value?.let { mac ->
-                val granted = Runtime.pairedClients.value.any { it.id == mac && it.shell != null }
-                return idleOnMacWithoutShell(ShellReach.withoutCredential(granted, anyLocked = false, keyLost = granted && vault.isLost(mac)))
-            }
+            // The same per-Mac key facts the last refresh used, so a locked or lost key keeps its recovery state.
+            _selectedMacID.value?.let { mac -> return idleOnMacWithoutShell(keyFacts.reachWithoutCredential(mac)) }
             if (_macs.value.isEmpty()) _reach.value = ShellReach.NO_ACCESS
             return
         }
@@ -1031,6 +1032,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         dropConnection()
         watcher.stop()
         keys = emptyMap()
+        keyFacts = ShellKeyFacts()
         _macs.value = emptyList()
         if (reach == ShellReach.NO_ACCESS || reach == ShellReach.UNSUPPORTED) {
             discovery.stop()

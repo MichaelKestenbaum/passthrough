@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -110,7 +109,7 @@ fun RemoteShellCard(vm: ShellViewModel, onOpen: (String?) -> Unit, onHistory: ()
             }
             // Which Mac, and how it's reached: its own line, so long names and large text fit.
             if (macName != null && (reach == ShellReach.READY || reach == ShellReach.CONNECTING || reach == ShellReach.UNREACHABLE)) {
-                MacLine(vm, macName, if (reach == ShellReach.READY) path?.label else null, pickable = macs.size > 1)
+                MacLine(macName, if (reach == ShellReach.READY) path?.label else null)
             }
             when (reach) {
                 ShellReach.CONNECTING -> Row(
@@ -157,28 +156,12 @@ fun RemoteShellCard(vm: ShellViewModel, onOpen: (String?) -> Unit, onHistory: ()
 }
 
 @Composable
-private fun MacLine(vm: ShellViewModel, macName: String, pathLabel: String?, pickable: Boolean) {
+private fun MacLine(macName: String, pathLabel: String?) {
     val c = LocalPT.current
-    val macs by vm.macs.collectAsStateWithLifecycle()
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .then(if (pickable) Modifier.clickable(role = Role.DropdownList) { open = true }.heightIn(min = 40.dp) else Modifier)
-                .semantics { if (pickable) contentDescription = "Mac: $macName. Choose another Mac" },
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(macName, style = PT.display(15.sp, FontWeight.SemiBold), color = c.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false))
-            if (pickable) Icon(Icons.Filled.UnfoldMore, null, tint = c.secondary, modifier = Modifier.size(16.dp))
-            pathLabel?.let { Text("· $it", style = PT.display(13.sp, FontWeight.Normal), color = c.secondary, maxLines = 1) }
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            macs.forEach { mac ->
-                DropdownMenuItem(text = { Text(mac.macName) }, onClick = { open = false; vm.select(mac.macID) })
-            }
-        }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(macName, style = PT.display(15.sp, FontWeight.SemiBold), color = c.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
+        pathLabel?.let { Text("· $it", style = PT.display(13.sp, FontWeight.Normal), color = c.secondary, maxLines = 1) }
     }
 }
 

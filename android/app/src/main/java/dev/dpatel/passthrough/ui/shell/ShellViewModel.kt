@@ -219,6 +219,9 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     private val refreshes = Channel<Unit>(Channel.CONFLATED)
     /** Debug builds only: the [ShellDemo] state shown instead of a real Mac (null normally). */
     private var demo: String? = null
+    private val _demoPaired = MutableStateFlow<List<PairedClient>>(emptyList())
+    /** Debug demo only: the demo Macs standing in for paired ones in the switcher (empty in normal use). */
+    val demoPaired: StateFlow<List<PairedClient>> = _demoPaired.asStateFlow()
 
     private class PendingTranscript(val id: String, val result: CompletableDeferred<List<ShellReplayChunk>?>) {
         val replay = ShellReplay.Collector()
@@ -252,6 +255,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     fun startDemo(state: String) {
         if (!BuildConfig.DEBUG) return
         demo = state
+        _demoPaired.value = if (ShellDemo.reach(state) == ShellReach.NO_ACCESS) emptyList()
+        else ShellDemo.macs.map { PairedClient(it.macID, it.macName, "", 0) }
         refresh()
     }
 

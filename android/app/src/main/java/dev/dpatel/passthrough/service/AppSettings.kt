@@ -10,6 +10,9 @@ import dev.dpatel.passthrough.core.PassthroughProtocol
 import dev.dpatel.passthrough.core.ShellConnectMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /** User settings, observable from Compose. Same keys as the iOS app's shared defaults. */
 class AppSettings(context: Context) {
@@ -77,7 +80,23 @@ class AppSettings(context: Context) {
         prefs.edit().apply { if (macID == null) remove(SHELL_LAST_MAC) else putString(SHELL_LAST_MAC, macID) }.apply()
     }
 
+    /** When each Mac's shell last answered (Unix millis), on the live connection or a watch. */
+    fun shellLastHeard(): Map<String, Long> = times(SHELL_LAST_HEARD)
+    fun setShellLastHeard(times: Map<String, Long>) = setTimes(SHELL_LAST_HEARD, times)
+
+    /** When each Mac was last selected (Unix millis), for which Macs to watch; same key as the iOS app. */
+    fun shellLastSelectedAt(): Map<String, Long> = times(SHELL_LAST_SELECTED_AT)
+    fun setShellLastSelectedAt(times: Map<String, Long>) = setTimes(SHELL_LAST_SELECTED_AT, times)
+
+    private fun times(key: String): Map<String, Long> =
+        prefs.getString(key, null)?.let { runCatching { Json.decodeFromString(timesSerializer, it) }.getOrNull() } ?: emptyMap()
+
+    private fun setTimes(key: String, times: Map<String, Long>) {
+        prefs.edit { if (times.isEmpty()) remove(key) else putString(key, Json.encodeToString(timesSerializer, times)) }
+    }
+
     companion object {
+        private val timesSerializer = MapSerializer(String.serializer(), Long.serializer())
         const val DEVICE_NAME = "device.name"
         const val CELLULAR_ONLY = "settings.cellularOnly"
         const val ALLOW_UDP = "settings.allowUDP"
@@ -92,6 +111,8 @@ class AppSettings(context: Context) {
         const val SHELL_TAB_MEMORY = "shell.tabMemory"
         const val SHELL_LAST_MAC = "shell.lastMac"
         const val SHELL_HIDDEN_SESSIONS = "shell.hiddenSessions"
+        const val SHELL_LAST_HEARD = "shell.lastHeard"
+        const val SHELL_LAST_SELECTED_AT = "shell.lastSelectedAt"
     }
 }
 

@@ -39,11 +39,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -141,6 +144,22 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     /** "Connect using": this device's choice. */
     val connectMode: StateFlow<ShellConnectMode> = Runtime.settings.shellConnectMode
 
+    /** The other paired Macs' sessions and state, while the app is in the foreground and unlocked. */
+    private val watcher = MacWatcher(
+        viewModelScope,
+        hiddenSessions = { hiddenSessions },
+        discovered = { ShellCredentials.discovered(discovery.services.value, it.macName, _macs.value.size)?.endpoint },
+        recency = { MacProfiles.recency(Runtime.settings.shellLastHeard(), Runtime.settings.shellLastSelectedAt()) },
+        storedLastHeard = { Runtime.settings.shellLastHeard()[it] },
+        noteHeard = ::noteHeard,
+    )
+    /** What each watched Mac (never the selected one) last said, by Mac ID. */
+    val watchedMacs: StateFlow<Map<String, MacWatcher.Seen>> = watcher.seen
+    /** A session on a Mac other than the selected one is waiting on a question. */
+    val otherMacNeedsYou: StateFlow<Boolean> = combine(_macs, _selectedMacID, watcher.seen) { macs, selected, seen ->
+        macs.any { it.macID != selected && otherStatus(it.macID, macs, seen) is MacStatus.Asking }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     private val listeners = LinkedHashSet<ShellStreamListener>()
 
     private var lock: AppLock? = null
@@ -223,7 +242,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
                 if (found != dialedDiscovered) connect()
             }
         }
-        // "Connect using" changed: dial again with the new choice.
+        // "Connect using" changed: dial again with the new choice (connect() redials the watches first).
         viewModelScope.launch {
             connectMode.drop(1).collect { if (_macs.value.isNotEmpty() && foreground) connect() }
         }
@@ -263,6 +282,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         foreground = false
         stopRedialing()
         dropConnection()
+        watcher.stop()
         discovery.stop()
         // Not usable until the foreground refresh dials again (typing meanwhile would go nowhere).
         if (_reach.value == ShellReach.READY) _reach.value = ShellReach.CONNECTING
@@ -362,6 +382,9 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             _selectedMacID.value = MacProfiles.reopen(Runtime.settings.shellLastMac(), built.map { it.macID })
         }
         val current = current() ?: return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
+        // Before any dial below: a watch on the (newly) selected Mac ends first. Also covers
+        // the paths that keep the live connection (a new pairing changes what is watched).
+        updateWatcher()
         if (!foreground) return
         discovery.start()
         // Keep a live connection to the same Mac with the same key: a `macInfo` only
@@ -384,7 +407,9 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         clientMacID?.let { _tabMemory.value = _tabMemory.value.save(MacTabs(_openTabs.value, _activeSession.value), it) }
         saveTabMemory()
         Runtime.settings.setShellLastMac(macID)
+        Runtime.settings.setShellLastSelectedAt(Runtime.settings.shellLastSelectedAt() + (macID to System.currentTimeMillis()))
         _selectedMacID.value = macID
+        // connect() ends the new Mac's watch before it dials.
         connect()
     }
 
@@ -399,12 +424,49 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Other Macs
+
+    /** What a Mac's row in the switcher says: the selected Mac from the live connection, the others from their watch. */
+    fun status(macID: String): MacStatus {
+        if (macID != _selectedMacID.value) return otherStatus(macID, _macs.value, watcher.seen.value)
+        return MacProfiles.status(_visibleSessions.value, reachable = _reach.value == ShellReach.READY,
+            lastHeardMillis = Runtime.settings.shellLastHeard()[macID], hasShell = _macs.value.any { it.macID == macID })
+    }
+
+    private fun otherStatus(macID: String, macs: List<ShellCredential>, seen: Map<String, MacWatcher.Seen>): MacStatus {
+        val watched = seen[macID]
+        return MacProfiles.status(watched?.sessions, reachable = watched?.reachable ?: false,
+            lastHeardMillis = watched?.lastHeardMillis ?: Runtime.settings.shellLastHeard()[macID],
+            hasShell = macs.any { it.macID == macID })
+    }
+
+    /**
+     * Starts or ends watches to match the paired Macs and the selection; ends them all while in
+     * the background or locked (watches are foreground only). Runs on the main thread before every
+     * live dial ([connect], [applyLoaded]), so the selected Mac's watch is retired first.
+     */
+    private fun updateWatcher() {
+        if (demo != null) return applyDemoWatch()
+        if (!foreground || lock?.unlocked?.value != true) return watcher.stop()
+        // Android has no Live Activity: nothing is pinned.
+        watcher.update(_macs.value, _selectedMacID.value, pinned = emptySet(), connectMode.value)
+    }
+
+    private fun noteHeard(macID: String, millis: Long) {
+        Runtime.settings.setShellLastHeard(Runtime.settings.shellLastHeard() + (macID to millis))
+    }
+
     // Connection
 
     private fun current(): ShellCredential? = _macs.value.firstOrNull { it.macID == _selectedMacID.value }
 
-    /** Dials the selected Mac (replacing any connection); once ready, re-attaches (the Mac sends its sessions unasked). */
+    /**
+     * Dials the selected Mac (replacing any connection); once ready, re-attaches (the Mac sends its
+     * sessions unasked). First of all, the watches are brought in line with the selection, so the
+     * selected Mac's watch (if any) is ended before the live connection is started.
+     */
     fun connect() {
+        updateWatcher()
         if (demo != null) return refresh()
         dropConnection()
         redialJob?.cancel()
@@ -636,6 +698,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         when (event) {
             is ShellEvent.Ready -> {
                 stopRedialing()
+                if (demo == null) clientMacID?.let { noteHeard(it, System.currentTimeMillis()) }
                 _reach.value = ShellReach.READY
                 _path.value = event.path
                 connection?.let { conn -> controls.readied(SystemClock.elapsedRealtime()).forEach { send(conn, it) } }
@@ -742,6 +805,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             }
             is ShellEvent.Disconnected -> {
                 val dropped = _reach.value == ShellReach.READY
+                if (dropped) clientMacID?.let { noteHeard(it, System.currentTimeMillis()) }
                 connection = null
                 reattachIfRefused = false
                 _path.value = null
@@ -814,6 +878,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ends the connection without touching tabs, so a later [connect] re-attaches. */
     private fun dropConnection() {
+        // Remember when the Mac being left last answered, for "last heard".
+        if (_reach.value == ShellReach.READY && demo == null) clientMacID?.let { noteHeard(it, System.currentTimeMillis()) }
         generation++
         connectJob?.let { job -> if (connection == null) job.cancel() }
         connectJob = null
@@ -889,6 +955,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             publishVisible()
         }
         if (Runtime.settings.shellLastMac()?.let { it !in paired } == true) Runtime.settings.setShellLastMac(null)
+        val heard = Runtime.settings.shellLastHeard()
+        if (heard.keys.any { it !in paired }) Runtime.settings.setShellLastHeard(heard.filterKeys { it in paired })
+        val selectedAt = Runtime.settings.shellLastSelectedAt()
+        if (selectedAt.keys.any { it !in paired }) Runtime.settings.setShellLastSelectedAt(selectedAt.filterKeys { it in paired })
     }
 
     /** Clears everything the connected Mac said, tabs included (its tabs stay in [tabMemory]). */
@@ -926,6 +996,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     private fun clear(reach: ShellReach) {
         stopRedialing()
         dropConnection()
+        watcher.stop()
         keys = emptyMap()
         _macs.value = emptyList()
         if (reach == ShellReach.NO_ACCESS || reach == ShellReach.UNSUPPORTED) {
@@ -944,6 +1015,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         if (_macs.value.none { it.macID == _selectedMacID.value }) {
             _selectedMacID.value = MacProfiles.reopen(Runtime.settings.shellLastMac(), _macs.value.map { it.macID })
         }
+        applyDemoWatch()
         if (reach != ShellReach.READY) {
             _reach.value = reach
             return
@@ -963,8 +1035,22 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         ShellDemo.ended(id)?.let(::handle)
     }
 
+    /** The other demo Macs as a watch would see them (the second one's `codex` session is asking), without dialling. */
+    private fun applyDemoWatch() {
+        val state = demo ?: return
+        if (!BuildConfig.DEBUG || ShellDemo.reach(state) != ShellReach.READY) return watcher.demoShow(emptyMap())
+        val now = System.currentTimeMillis()
+        val ids = MacProfiles.watched(_macs.value.map { it.macID }, _selectedMacID.value, emptyMap(), emptySet(), MacWatcher.LIMIT)
+        watcher.demoShow(ids.associateWith { id ->
+            val opened = _tabMemory.value.tabs(id).openTabs.filter { it.startsWith(ShellDemo.newPrefix(id)) }
+            MacWatcher.Seen(hiddenSessions.visible(ShellDemo.sessions(id, opened), id), ShellDemo.watchedMacState,
+                reachable = true, lastHeardMillis = now)
+        })
+    }
+
     override fun onCleared() {
         dropConnection()
+        watcher.stop()
         discovery.stop()
     }
 

@@ -70,6 +70,9 @@ internal object ShellDemo {
     val macState = MacState(awake = true, battery = 0.64, charging = false, minutesLeft = 190, batteryFloor = 0.2, hot = false,
         vpn = MacStates.VPN_ON, vpnName = "NordVPN Germany", killSwitch = true, control = true)
 
+    /** What the other demo Macs report through the watcher. */
+    val watchedMacState = MacState(awake = true, battery = 0.9, charging = true, control = true)
+
     fun timeline(since: Double): MacTimeline {
         val start = now() - (2 * 3600 + 14 * 60)
         fun at(minutes: Double) = start + minutes * 60

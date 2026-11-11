@@ -1,5 +1,6 @@
 package dev.dpatel.passthrough.ui.shell
 
+import dev.dpatel.passthrough.core.ShellCredential
 import dev.dpatel.passthrough.core.ShellSessionInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -154,5 +155,46 @@ class MacProfilesTests {
             listOf("c3", "c2"),
             MacProfiles.watched(listOf("c1", "c2", "c3"), "c1", mapOf("c3" to 2.0, "c2" to 1.0), pinned = setOf("gone")),
         )
+    }
+
+    @Test fun recencyTakesTheLaterOfHeardAndSelected() {
+        assertEquals(
+            mapOf("a" to 40.0, "b" to 50.0, "c" to 5.0),
+            MacProfiles.recency(lastHeard = mapOf("a" to 10L, "b" to 50L), lastSelected = mapOf("a" to 40L, "c" to 5L)),
+        )
+    }
+
+    private fun credential(id: String, key: Byte = 1, addresses: List<String> = listOf("10.0.0.1")) =
+        ShellCredential(id, id, "cert", byteArrayOf(key), "phone", 7, addresses)
+
+    @Test fun watchChanges() {
+        val a = credential("a")
+        val b = credential("b")
+        val c = credential("c")
+        // Nothing running: dial everything wanted, in order.
+        var changes = MacProfiles.watchChanges(emptyMap(), listOf(b, a))
+        assertEquals(emptySet<String>(), changes.stop)
+        assertEquals(listOf("b", "a"), changes.start.map { it.macID })
+        // Same set: nothing to do (credentials compare by content, key bytes included).
+        changes = MacProfiles.watchChanges(mapOf("a" to a, "b" to b), listOf(credential("a"), b))
+        assertEquals(emptySet<String>(), changes.stop)
+        assertEquals(emptyList<ShellCredential>(), changes.start)
+        // b no longer watched, c new.
+        changes = MacProfiles.watchChanges(mapOf("a" to a, "b" to b), listOf(a, c))
+        assertEquals(setOf("b"), changes.stop)
+        assertEquals(listOf("c"), changes.start.map { it.macID })
+        // a's key or addresses changed: redial it.
+        val newKey = credential("a", key = 2)
+        val moved = credential("a", addresses = listOf("10.0.0.2"))
+        changes = MacProfiles.watchChanges(mapOf("a" to a), listOf(newKey))
+        assertEquals(setOf("a"), changes.stop)
+        assertEquals(listOf(newKey), changes.start)
+        changes = MacProfiles.watchChanges(mapOf("a" to a), listOf(moved))
+        assertEquals(setOf("a"), changes.stop)
+        assertEquals(listOf(moved), changes.start)
+        // Nothing wanted: stop all.
+        changes = MacProfiles.watchChanges(mapOf("a" to a, "b" to b), emptyList())
+        assertEquals(setOf("a", "b"), changes.stop)
+        assertEquals(emptyList<ShellCredential>(), changes.start)
     }
 }

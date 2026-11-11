@@ -1,6 +1,7 @@
 package dev.dpatel.passthrough.ui.shell
 
 import android.text.format.DateUtils
+import dev.dpatel.passthrough.core.ShellCredential
 import dev.dpatel.passthrough.core.ShellSessionInfo
 import dev.dpatel.passthrough.core.isAsking
 import java.text.BreakIterator
@@ -165,6 +166,32 @@ object MacProfiles {
             .sortedByDescending { recency[it] ?: 0.0 }
             .take(maxOf(limit, 0))
         return pinnedFirst + rest
+    }
+
+    /**
+     * How recently each Mac was used, for [watched]: the later of when it
+     * last answered and when it was last selected (Unix millis).
+     */
+    fun recency(lastHeard: Map<String, Long>, lastSelected: Map<String, Long>): Map<String, Double> =
+        (lastHeard.keys + lastSelected.keys).associateWith { id ->
+            maxOf(lastHeard[id] ?: Long.MIN_VALUE, lastSelected[id] ?: Long.MIN_VALUE).toDouble()
+        }
+
+    /** What [watchChanges] says to do: watches to end, then Macs to dial (in [wanted] order). */
+    data class WatchChanges(val stop: Set<String>, val start: List<ShellCredential>)
+
+    /**
+     * Which watch connections to end and which to dial so the running set
+     * becomes [wanted]: a Mac no longer wanted, or whose credential changed
+     * (a new key or address), is stopped; a wanted Mac not running, or
+     * stopped for a change, is started. `start` keeps [wanted]'s order.
+     */
+    fun watchChanges(running: Map<String, ShellCredential>, wanted: List<ShellCredential>): WatchChanges {
+        val wantedByID = LinkedHashMap<String, ShellCredential>()
+        for (credential in wanted) wantedByID.putIfAbsent(credential.macID, credential)
+        val stop = running.filter { (id, credential) -> wantedByID[id] != credential }.keys
+        val start = wanted.filter { running[it.macID] == null || it.macID in stop }
+        return WatchChanges(stop, start)
     }
 }
 

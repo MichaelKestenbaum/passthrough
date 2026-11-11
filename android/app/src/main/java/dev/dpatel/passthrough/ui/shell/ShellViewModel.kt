@@ -363,7 +363,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         // A Mac the phone forgot (one or all) takes its tabs and last-used mark with it.
         forgetUnpaired(loaded.clients.map { it.id }.toSet())
         val granting = loaded.clients.filter { it.shell != null }
-        ShellReach.beforeKeys(vault.supported, unlocked = true, loaded.deviceSecure, granting.isNotEmpty())?.let { return clear(it) }
+        ShellReach.beforeKeys(vault.supported, unlocked = true, loaded.deviceSecure, granting.isNotEmpty())?.let { return clear(it, paired = loaded.clients.map { c -> c.id }) }
         if (loaded.anyLocked) {
             if (!relockRequested) {
                 // The vault needs an unlock prompt (a grant arrived while the app was open and the vault
@@ -388,9 +388,13 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
             _selectedMacID.value, Runtime.settings.shellLastMac(), loaded.clients.map { it.id }, built.map { it.macID },
         )
         val current = current() ?: run {
-            if (_selectedMacID.value == null) return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
+            val mac = _selectedMacID.value
+            if (mac == null) return clear(ShellReach.withoutCredential(granting.isNotEmpty(), loaded.anyLocked, loaded.keyLost))
             updateWatcher()
-            return idleOnMacWithoutShell()
+            // A grant whose key can't be read keeps its recovery state; a Mac with no grant is internet only.
+            return idleOnMacWithoutShell(
+                ShellReach.withoutCredential(loaded.clients.any { it.id == mac && it.shell != null }, loaded.anyLocked, loaded.keyLost),
+            )
         }
         // Before any dial below: a watch on the (newly) selected Mac ends first. Also covers
         // the paths that keep the live connection (a new pairing changes what is watched).
@@ -484,7 +488,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val credential = current()
         if (credential == null) {
             stopRedialing()
-            if (_selectedMacID.value != null) return idleOnMacWithoutShell()
+            _selectedMacID.value?.let { mac ->
+                val granted = Runtime.pairedClients.value.any { it.id == mac && it.shell != null }
+                return idleOnMacWithoutShell(ShellReach.withoutCredential(granted, anyLocked = false, keyLost = granted && vault.isLost(mac)))
+            }
             if (_macs.value.isEmpty()) _reach.value = ShellReach.NO_ACCESS
             return
         }
@@ -911,18 +918,18 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The selected Mac is paired but has no shell credential (internet only): the same Mac change as
-     * [switchSessions] so nothing of the Mac left (sessions, tabs, state) shows or is saved under this
-     * one, and nothing to dial.
+     * The selected Mac is paired but has no usable shell credential: internet only ([reach] NO_ACCESS), or
+     * a grant whose key can't be read (its recovery state). Nothing of the Mac left (sessions, tabs,
+     * state) shows, and no tabs are restored or saved for this one: [clientMacID] is null, so the next
+     * dial with a credential restores its remembered tabs.
      */
-    private fun idleOnMacWithoutShell() {
-        val mac = _selectedMacID.value ?: return
+    private fun idleOnMacWithoutShell(reach: ShellReach) {
         stopRedialing()
         dropConnection()
-        if (clientMacID != mac) switchSessions(mac) else resetSessions()
-        clientMacID = mac
+        resetSessions()
+        clientMacID = null
         _lastError.value = null
-        _reach.value = ShellReach.NO_ACCESS
+        _reach.value = reach
     }
 
     /**
@@ -1019,7 +1026,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
      * merely locked (or without a passcode) the selection and tabs stay, so the
      * next unlock reconnects and re-attaches.
      */
-    private fun clear(reach: ShellReach) {
+    private fun clear(reach: ShellReach, paired: List<String> = emptyList()) {
         stopRedialing()
         dropConnection()
         watcher.stop()
@@ -1027,7 +1034,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         _macs.value = emptyList()
         if (reach == ShellReach.NO_ACCESS || reach == ShellReach.UNSUPPORTED) {
             discovery.stop()
-            _selectedMacID.value = null
+            // A paired Mac (internet only, or no grant yet) stays selected; with none paired, nothing is.
+            _selectedMacID.value = MacProfiles.selection(_selectedMacID.value, Runtime.settings.shellLastMac(), paired, emptyList())
             clientMacID = null
             resetSessions()
         }

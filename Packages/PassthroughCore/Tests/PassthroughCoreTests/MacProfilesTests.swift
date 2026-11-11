@@ -42,6 +42,30 @@ final class MacProfilesTests: XCTestCase {
         XCTAssertTrue(hidden.byMac.isEmpty)
     }
 
+    func testSelectionKeepsPairedMacWithoutShell() {
+        let paired = ["a", "net", "b"]
+        let withShell = ["a", "b"]
+        XCTAssertEqual(MacProfiles.selection(current: "net", lastUsed: "a", paired: paired, withShell: withShell), "net")
+        // Unpaired current falls back to last used (even internet-only), then the first with a shell.
+        XCTAssertEqual(MacProfiles.selection(current: "gone", lastUsed: "net", paired: paired, withShell: withShell), "net")
+        XCTAssertEqual(MacProfiles.selection(current: "gone", lastUsed: "also-gone", paired: ["net", "b"], withShell: withShell), "b")
+        XCTAssertEqual(MacProfiles.selection(current: nil, lastUsed: nil, paired: ["net"], withShell: []), "net")
+        XCTAssertNil(MacProfiles.selection(current: "gone", lastUsed: nil, paired: [], withShell: []))
+    }
+
+    func testKeyFactsPerMac() {
+        let facts = ShellKeyFacts(granting: ["locked", "missing"], locked: ["locked"])
+        // A Mac that granted the shell but whose key can't be read: plug in to renew.
+        XCTAssertTrue(facts.keyUnavailable(for: "locked"))
+        XCTAssertTrue(facts.keyUnavailable(for: "missing"))
+        // A Mac that never granted the shell: internet only.
+        XCTAssertFalse(facts.keyUnavailable(for: "internetOnly"))
+        // Nothing selected: any grant without a key is worth recovering.
+        XCTAssertTrue(facts.keyUnavailable(for: nil))
+        XCTAssertFalse(ShellKeyFacts().keyUnavailable(for: nil))
+        XCTAssertFalse(ShellKeyFacts().keyUnavailable(for: "a"))
+    }
+
     func testStatusPrecedence() {
         let asking = info("a", waiting: "Edit?", title: "claude")
         let plain = info("b")

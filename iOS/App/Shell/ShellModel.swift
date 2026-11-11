@@ -162,6 +162,12 @@ final class ShellModel: ObservableObject {
     static let redialDelays: [TimeInterval] = [0, 1, 2, 4, 8, 15]
     /// The addresses each Mac granted, so a manual address can be applied without re-reading keys.
     private var granted: [String: [String]] = [:]
+    /// Which Macs granted the shell and whose key needed authentication, as of the last
+    /// refresh; read when `connect` selects a Mac without a usable credential.
+    private var keyFacts = ShellKeyFacts()
+    /// Every paired Mac (with or without the shell), as of the last refresh: the
+    /// selection stays on any of them, and the header names it.
+    private var paired: [PairedClient] = []
     private var size = (cols: 80, rows: 24)
     /// A new session asked for while connecting (or waiting to redial):
     /// opened on `.ready`. Dropped once the Mac can't be reached, or for
@@ -214,8 +220,10 @@ final class ShellModel: ObservableObject {
         #if DEBUG
         if let demo = Self.demoState { return lock.isUnlocked ? applyDemo(demo) : clear(.locked) }
         #endif
-        guard lock.isUnlocked else { return clear(granting.isEmpty ? .noAccess : .locked) }
-        guard ShellKeyVault.passcodeSet else { return clear(granting.isEmpty ? .noAccess : .needsPasscode) }
+        paired = clients
+        let pairedIDs = clients.map(\.id)
+        guard lock.isUnlocked else { return clear(granting.isEmpty ? .noAccess : .locked, paired: pairedIDs) }
+        guard ShellKeyVault.passcodeSet else { return clear(granting.isEmpty ? .noAccess : .needsPasscode, paired: pairedIDs) }
 
         // Read at call time: the lock replaces its context on every relock.
         let context = lock.context
@@ -224,15 +232,16 @@ final class ShellModel: ObservableObject {
         var memory = tabMemory
         memory.keepOnly(Set(clients.map(\.id)))
         if memory != tabMemory { tabMemory = memory; saveTabMemory() }
-        var anyLocked = false
+        var locked: Set<String> = []
         let built = ShellCredentials.build(clients: granting, phoneID: registry.phoneID, key: { id in
             switch ShellKeyVault.read(macID: id, context: context) {
             case let .key(data): return data
-            case .locked: anyLocked = true; return nil
+            case .locked: locked.insert(id); return nil
             case .missing: return nil
             }
         }, manualAddress: manualAddress(for:), relayToken: { registry.relayToken(clientID: $0) })
-        if anyLocked {
+        let facts = ShellKeyFacts(granting: Set(granting.map(\.id)), locked: locked)
+        if !locked.isEmpty {
             if !relockRequested {
                 // The lock's context no longer satisfies the item: end the session so the
                 // lock prompts once. Deferred: this runs inside the lock's own change handler.
@@ -245,19 +254,23 @@ final class ShellModel: ObservableObject {
             relockRequested = false
         }
         granted = Dictionary(granting.compactMap { c in c.shell.map { (c.id, $0.addresses) } }, uniquingKeysWith: { a, _ in a })
+        keyFacts = facts
 
         let previous = macs.first { $0.macID == clientMacID }
         applyingRefresh = true
         macs = built
-        if selectedMacID.map({ id in !built.contains { $0.macID == id } }) ?? true {
-            selectedMacID = MacProfiles.reopen(lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
-                                               available: built.map(\.macID))
-        }
+        // A paired Mac stays selected even without a shell credential (internet only).
+        selectedMacID = MacProfiles.selection(current: selectedMacID, lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
+                                              paired: pairedIDs, withShell: built.map(\.macID))
         applyingRefresh = false
 
         guard let current = built.first(where: { $0.macID == selectedMacID }) else {
             // A Mac granted access but its key isn't here: plugging in renews it.
-            return clear(anyLocked || !granting.isEmpty ? .keyUnavailable : .noAccess)
+            guard let mac = selectedMacID else { return clear(facts.keyUnavailable(for: nil) ? .keyUnavailable : .noAccess) }
+            // Before leaving the live connection: the other Macs' watches follow the selection.
+            startBrowsing()
+            updateWatcher()
+            return idleOnMacWithoutShell(facts.keyUnavailable(for: mac) ? .keyUnavailable : .noAccess)
         }
         startBrowsing()
         updateWatcher()
@@ -280,8 +293,10 @@ final class ShellModel: ObservableObject {
     /// The selected Mac's shell grant, if it has one.
     var selectedMac: ShellCredential? { macs.first { $0.macID == selectedMacID } }
 
-    /// The Mac on screen: the selected shell Mac, else the first paired one.
-    var selectedMacName: String { selectedMac?.macName ?? registry?.clients.first?.name ?? "Your Mac" }
+    /// The Mac on screen: the selected Mac (with or without the shell), else the first paired one.
+    var selectedMacName: String {
+        selectedMac?.macName ?? (paired.first { $0.id == selectedMacID } ?? paired.first)?.name ?? "Your Mac"
+    }
 
     /// The selected Mac's shell can be reached off its own network (iroh).
     var selectedReachesFromAnywhere: Bool { selectedMac?.irohID != nil }
@@ -437,6 +452,11 @@ final class ShellModel: ObservableObject {
         redialTask = nil
         guard let credential = macs.first(where: { $0.macID == selectedMacID }) else {
             redialsMade = nil
+            // A paired Mac without a usable credential: nothing of the Mac left shows, and the
+            // same per-Mac key facts the last refresh used say why. Not while locked: unlocking refreshes.
+            if let mac = selectedMacID, reach != .locked, reach != .needsPasscode {
+                return idleOnMacWithoutShell(keyFacts.keyUnavailable(for: mac) ? .keyUnavailable : .noAccess)
+            }
             reach = macs.isEmpty ? .noAccess : reach
             return
         }
@@ -806,6 +826,23 @@ final class ShellModel: ObservableObject {
         holdingTabMemory = false
     }
 
+    /// The selected Mac is paired but has no usable shell credential: internet only
+    /// (`.noAccess`), or a grant whose key can't be read (`.keyUnavailable`). Nothing
+    /// of the Mac left (sessions, tabs, state) shows, and no tabs are restored or
+    /// saved for this one: `clientMacID` is nil, so the first connect with a
+    /// credential brings back its remembered tabs. The Mac left's tabs were saved by `select`.
+    private func idleOnMacWithoutShell(_ reach: Reach) {
+        redialTask?.cancel()
+        redialTask = nil
+        redialsMade = nil
+        dropConnection()
+        resetSessions()
+        lastError = nil
+        // Before dropping the Mac's ID: a drop from `.ready` is "last heard" for the Mac left.
+        self.reach = reach
+        clientMacID = nil
+    }
+
     /// Keeps the tabs showing as the connected Mac's.
     private func rememberTabs() {
         guard !holdingTabMemory, let mac = clientMacID else { return }
@@ -859,18 +896,22 @@ final class ShellModel: ObservableObject {
     /// No usable Mac right now: forget keys held in memory, stop dialing and
     /// browsing. While merely locked (or without a passcode) the selection and
     /// tabs stay, so the next unlock reconnects and re-attaches.
-    private func clear(_ reach: Reach) {
+    /// `paired`: the paired Macs, one of which stays selected on `.noAccess` (internet only, or no grant yet).
+    private func clear(_ reach: Reach, paired: [String] = []) {
         redialTask?.cancel()
         redialTask = nil
         redialsMade = nil
         dropConnection()
         watcher.stop()
+        keyFacts = ShellKeyFacts()
         // Browsing exposes nothing secret: keep it across relocks so results are ready on unlock.
         if reach == .noAccess { stopBrowsing() }
         applyingRefresh = true
         macs = []
         if reach == .noAccess {
-            selectedMacID = nil
+            // A paired Mac (internet only, or no grant yet) stays selected; with none paired, nothing is.
+            selectedMacID = MacProfiles.selection(current: selectedMacID, lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
+                                                  paired: paired, withShell: [])
             clientMacID = nil
             resetSessions()
         }
@@ -944,6 +985,13 @@ extension ShellError {
 extension ShellModel {
     static var demoState: String? { UserDefaults.standard.string(forKey: "PTDemoShell") }
 
+    /// The demo's paired Macs: two with the shell, and one paired for internet only.
+    static let demoPaired = [
+        PairedClient(id: "demo-mac", name: "MacBook Pro", tokenHash: "", pairedAt: .now),
+        PairedClient(id: "demo-mac-2", name: "Home Studio", tokenHash: "", pairedAt: .now),
+        PairedClient(id: "demo-mac-3", name: "Office iMac", tokenHash: "", pairedAt: .now),
+    ]
+
     fileprivate static let demoOutput: Data = {
         let esc = "\u{1b}["
         let prompt = "\(esc)1;36mme\(esc)0m@\(esc)1;35mmacbook\(esc)0m \(esc)34m~/dev/passthrough\(esc)0m % "
@@ -996,12 +1044,16 @@ extension ShellModel {
             ShellCredential(macID: "demo-mac-2", macName: "Home Studio", certSHA256: "", shellKey: Data(),
                             phoneID: "demo", port: 0, addresses: []),
         ]
-        if selectedMacID.map({ id in !macs.contains { $0.macID == id } }) ?? true {
-            selectedMacID = MacProfiles.reopen(lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
-                                               available: macs.map(\.macID))
-        }
+        paired = Self.demoPaired
+        selectedMacID = MacProfiles.selection(current: selectedMacID, lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
+                                              paired: paired.map(\.id), withShell: macs.map(\.macID))
         applyingRefresh = false
         guard let mac = selectedMacID else { return }
+        // The internet-only demo Mac: the same idle state as a real one.
+        guard macs.contains(where: { $0.macID == mac }) else {
+            applyDemoWatch()
+            return idleOnMacWithoutShell(.noAccess)
+        }
         if clientMacID != mac {
             switchSessions(to: mac)
             clientMacID = mac

@@ -56,6 +56,26 @@ public struct ShellHiddenSessions: Codable, Equatable, Sendable {
     public mutating func forget(_ macID: String) { byMac[macID] = nil }
 }
 
+/// What the last key read learned about each Mac that granted the shell: which
+/// granted (`granting`) and whose key needed authentication (`locked`). Kept
+/// between refreshes so a switch to a Mac without a usable credential shows the
+/// same state a refresh would. The Android app keeps the same facts.
+public struct ShellKeyFacts: Equatable, Sendable {
+    public var granting: Set<String>
+    public var locked: Set<String>
+
+    public init(granting: Set<String> = [], locked: Set<String> = []) {
+        self.granting = granting; self.locked = locked
+    }
+
+    /// Whether `macID` (nil: nothing selected) has no usable credential because its key
+    /// can't be read (plugging in renews it), rather than because it never granted the shell.
+    public func keyUnavailable(for macID: String?) -> Bool {
+        guard let macID else { return !granting.isEmpty || !locked.isEmpty }
+        return granting.contains(macID) || locked.contains(macID)
+    }
+}
+
 /// What a Mac's row in the switcher says about it.
 public enum MacStatus: Equatable, Sendable {
     /// Reachable; the number of running sessions.
@@ -108,6 +128,16 @@ public enum MacProfiles {
         var hash: UInt32 = 2_166_136_261
         for byte in macID.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
         return Int(hash % UInt32(paletteCount))
+    }
+
+    /// Which Mac is selected after the paired list or credentials change: `current`
+    /// while it is still paired (with or without a shell credential); else `lastUsed`
+    /// if paired; else the first paired Mac with a shell, then the first paired Mac;
+    /// nil when none is paired. The Android app picks the same.
+    public static func selection(current: String?, lastUsed: String?, paired: [String], withShell: [String]) -> String? {
+        if let current, paired.contains(current) { return current }
+        if let lastUsed, paired.contains(lastUsed) { return lastUsed }
+        return withShell.first(where: paired.contains) ?? paired.first
     }
 
     /// The Mac to open on launch: the last used one if still paired, else the first.

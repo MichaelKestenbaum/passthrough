@@ -29,6 +29,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,8 +119,12 @@ fun MacSwitcherSheet(
     // Read now (not through a delegate) so a connection change redraws the current Mac's row.
     shell.reach.collectAsStateWithLifecycle().value
 
+    // The first tap wins: rows and actions do nothing while the sheet is closing.
+    var acting by remember { mutableStateOf(false) }
+
     /** Closes the sheet, then [then] (which may present something else). */
     fun close(then: () -> Unit = {}) {
+        acting = true
         scope.launch {
             sheet.hide()
             onDismiss()
@@ -151,6 +158,7 @@ fun MacSwitcherSheet(
                         macID = client.id, name = name, status = MacProfiles.statusText(status, nowMillis),
                         asking = asking, current = current,
                     ) {
+                        if (acting) return@MacRow
                         // The session is read before the switch swaps the lists; the terminal opens after the sheet is gone.
                         val question = if (asking) askingSession(client.id) else null
                         shell.select(client.id)
@@ -159,9 +167,9 @@ fun MacSwitcherSheet(
                 }
             }
             PTCard(padding = 6.dp) {
-                ActionRow("Add a Mac", Icons.Filled.Add) { close(onAddMac) }
+                ActionRow("Add a Mac", Icons.Filled.Add) { if (!acting) close(onAddMac) }
                 HorizontalDivider(Modifier.padding(start = 62.dp), color = c.cardBorder)
-                ActionRow("Settings", Icons.Filled.Settings) { close(onSettings) }
+                ActionRow("Settings", Icons.Filled.Settings) { if (!acting) close(onSettings) }
             }
         }
     }

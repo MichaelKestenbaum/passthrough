@@ -129,7 +129,8 @@ fun MacScreen(
 
     val isPaired = paired.isNotEmpty() || macs.isNotEmpty()
     val macID = selected ?: paired.firstOrNull()?.id
-    val macName = macs.firstOrNull { it.macID == selected }?.macName ?: paired.firstOrNull()?.name ?: "Your Mac"
+    val macName = macs.firstOrNull { it.macID == selected }?.macName
+        ?: (paired.firstOrNull { it.id == selected } ?: paired.firstOrNull())?.name ?: "Your Mac"
     val online = macID != null && stats.macs.any { it.id == macID }
     val running = sessions.filter { it.running }
 

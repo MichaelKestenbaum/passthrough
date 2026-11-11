@@ -11,6 +11,7 @@ struct MacHomeView: View {
     @Binding var tab: RootTab
     @Binding var showPairing: Bool
     @Binding var showSettings: Bool
+    @State private var showSwitcher = false
     @State private var confirmSleep = false
     @State private var confirmVPNOff = false
     /// The switch last changed here, so a refusal without a switch named lands under it.
@@ -52,18 +53,17 @@ struct MacHomeView: View {
             }
             .background(PTColor.background)
             .navigationTitle(macName)
-            .navigationBarTitleDisplayMode(shell.macs.count > 1 ? .inline : .large)
-            .toolbarTitleMenu {
-                if shell.macs.count > 1 {
-                    Picker("Mac", selection: Binding(get: { shell.selectedMacID }, set: { if let id = $0 { shell.select(id) } })) {
-                        ForEach(shell.macs, id: \.macID) { Text($0.macName).tag(Optional($0.macID)) }
-                    }
-                }
-            }
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
+                    if paired {
+                        Button { showSwitcher = true } label: {
+                            MacAvatar(macID: macID ?? "", name: macName, badge: shell.otherMacNeedsYou)
+                        }
+                    } else {
+                        Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                            .accessibilityLabel("Settings")
+                    }
                 }
             }
             .navigationDestination(isPresented: $router.showThisPhone) {
@@ -75,11 +75,17 @@ struct MacHomeView: View {
         } message: {
             Text(runningShells == 1 ? "1 running shell pauses until it wakes." : "\(runningShells) running shells pause until it wakes.")
         }
+        .sheet(isPresented: $showSwitcher) {
+            MacSwitcherSheet(shell: shell, showPairing: $showPairing, showSettings: $showSettings)
+        }
         .sheet(isPresented: $confirmVPNOff) {
             VPNOffSheet(macName: macName, killSwitch: state?.killSwitch == true) { shell.control(.vpn(false)) }
         }
         #if DEBUG
         .onAppear {
+            if ProcessInfo.processInfo.environment["PASSTHROUGH_SHOW_SWITCHER"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { showSwitcher = true }
+            }
             if ProcessInfo.processInfo.environment["PASSTHROUGH_SHOW_VPN_OFF"] == "1" {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { confirmVPNOff = true }
             }

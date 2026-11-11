@@ -118,11 +118,14 @@ extension RootView {
         guard lock.isUnlocked, let link = links.pending else { return }
         let shell = model.shell
         switch link {
-        case .mac:
+        case .mac(let macID):
+            selectLinked(macID)
             tab = .mac
             router.showThisPhone = false
             links.done()
-        case .session(let id):
+        case .session(let id, let macID):
+            // The Mac first: its tabs come back, and the terminal's tab is kept as that Mac's.
+            selectLinked(macID)
             router.terminal = .attach(id)
             links.done()
         case .keepAwake, .vpnOn:
@@ -140,6 +143,13 @@ extension RootView {
                 shell.control(.vpn(true))
             }
         }
+    }
+
+    /// A link from a Live Activity or widget names the Mac it shows: switch to it
+    /// (if still paired). Without one (an older link), the Mac selected now.
+    private func selectLinked(_ macID: String?) {
+        guard let macID, model.pairedClients.contains(where: { $0.id == macID }) else { return }
+        model.shell.select(macID)
     }
 
     /// The Live Activity and the widget show what the app last saw. Locked or

@@ -36,15 +36,20 @@ struct MacAvatar: View {
 }
 
 /// What the switcher hands its host to present once it has closed.
-enum SwitcherNext { case addMac, settings }
+enum SwitcherNext: Equatable {
+    case addMac, settings
+    /// The terminal at the question a session on that Mac is asking (the Mac is already selected).
+    case answer(macID: String, session: String)
+}
 
 /// "Your Macs": every paired Mac with what it's doing, then Add a Mac and Settings.
 struct MacSwitcherSheet: View {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var router: ShellRouter
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var shell: ShellModel
     @Binding var then: SwitcherNext?
+    /// The first tap wins: rows and actions do nothing once one was taken and the sheet is closing.
+    @State private var acting = false
 
     private struct Row: Identifiable { let id: String; let name: String }
 
@@ -68,9 +73,9 @@ struct MacSwitcherSheet: View {
                     }
                     PTSurface(padding: 6) {
                         VStack(spacing: 0) {
-                            actionRow("Add a Mac", systemImage: "plus") { then = .addMac; dismiss() }
+                            actionRow("Add a Mac", systemImage: "plus") { close(then: .addMac) }
                             Divider().padding(.leading, 62)
-                            actionRow("Settings", systemImage: "gearshape") { then = .settings; dismiss() }
+                            actionRow("Settings", systemImage: "gearshape") { close(then: .settings) }
                         }
                     }
                 }
@@ -115,13 +120,19 @@ struct MacSwitcherSheet: View {
         .accessibilityAddTraits(current ? .isSelected : [])
     }
 
-    private func choose(_ macID: String, asking: String?) {
+    /// Closes the sheet; `next` runs from the host's `onDismiss`, once the sheet has gone.
+    private func close(then next: SwitcherNext?) {
+        guard !acting else { return }
+        acting = true
+        then = next
         dismiss()
+    }
+
+    private func choose(_ macID: String, asking: String?) {
+        guard !acting else { return }
+        // The switch sets up the Mac's tabs now; the terminal attaches to the question after the sheet is gone.
         shell.select(macID)
-        if let asking {
-            // The switch has set up the Mac's tabs; the terminal then attaches to the question.
-            DispatchQueue.main.async { router.terminal = .attach(asking) }
-        }
+        close(then: asking.map { .answer(macID: macID, session: $0) })
     }
 
     private func actionRow(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {

@@ -100,6 +100,9 @@ struct MacHomeView: View {
         switch afterSwitcher {
         case .addMac: showPairing = true
         case .settings: showSettings = true
+        case let .answer(macID, session):
+            // Only if that Mac is still the one selected (nothing switched meanwhile).
+            if shell.selectedMacID == macID { router.terminal = .attach(session) }
         case nil: break
         }
     }

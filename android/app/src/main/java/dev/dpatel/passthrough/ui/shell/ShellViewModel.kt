@@ -529,7 +529,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ends a running session on the Mac, or just closes the tab of an ended one (the Mac would refuse to close it again). */
     fun close(id: String) {
-        if (_ended.value.isEnded(id) || _sessions.value.firstOrNull { it.id == id }?.running == false) return remove(id)
+        if (hiddenSessions.canRemove(id, _ended.value, _sessions.value)) return remove(id)
         connection?.close(id)
         _ended.value = _ended.value.forget(id)
         shownTabs = _openTabs.value - id
@@ -542,6 +542,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
      * has ended), so it works while the Mac is out of reach.
      */
     fun remove(id: String) {
+        if (!hiddenSessions.canRemove(id, _ended.value, _sessions.value)) return
         (clientMacID ?: _selectedMacID.value)?.let {
             hiddenSessions = hiddenSessions.hide(id, it)
             saveHiddenSessions()

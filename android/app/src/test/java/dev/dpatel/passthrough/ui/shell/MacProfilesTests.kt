@@ -2,6 +2,7 @@ package dev.dpatel.passthrough.ui.shell
 
 import dev.dpatel.passthrough.core.ShellSessionInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,6 +39,15 @@ class MacProfilesTests {
         assertEquals(MacTabMemory(), MacTabMemory.stored(null))
         assertEquals(MacTabMemory(), MacTabMemory.stored("not json"))
         assertEquals(MacTabMemory(), MacTabMemory.stored("{\"byMac\":42}"))
+    }
+
+    @Test fun onlyFinishedSessionsCanBeRemoved() {
+        val hidden = ShellHiddenSessions()
+        val list = listOf(info("run"), info("done", running = false))
+        assertTrue(hidden.canRemove("done", ShellEndedSessions(), list))
+        assertTrue(hidden.canRemove("gone", ShellEndedSessions().ended("gone", 0), list))
+        assertFalse(hidden.canRemove("run", ShellEndedSessions(), list))
+        assertFalse(hidden.canRemove("unknown", ShellEndedSessions(), list))
     }
 
     @Test fun hiddenRoundTripsThroughJsonAndPrunesUnpaired() {

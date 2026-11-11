@@ -60,6 +60,10 @@ data class ShellHiddenSessions(val byMac: Map<String, Set<String>> = emptyMap())
 
     fun forget(macID: String): ShellHiddenSessions = copy(byMac = byMac - macID)
 
+    /** Only a finished session can be removed: known ended, or listed as not running. A running or unknown one can't. */
+    fun canRemove(id: String, ended: ShellEndedSessions, sessions: List<ShellSessionInfo>): Boolean =
+        ended.isEnded(id) || sessions.firstOrNull { it.id == id }?.running == false
+
     /** Drops Macs no longer paired. */
     fun keepOnly(macIDs: Set<String>): ShellHiddenSessions = copy(byMac = byMac.filterKeys { it in macIDs })
 

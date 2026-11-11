@@ -31,6 +31,8 @@ final class MacActivityController {
     private var awaitingAwakeUntil: Date?
     private var lastSeen: Seen?
     private var lastSelected: Seen?
+    /// The Mac selected as of the last refresh, even while it is still connecting.
+    private var selection: (id: String?, name: String)?
 
     private var activity: Activity<MacActivityAttributes>? { Activity<MacActivityAttributes>.activities.first { $0.activityState != .ended && !endedIDs.contains($0.id) } }
     /// Activities an end was asked for that hasn't landed yet.
@@ -103,7 +105,7 @@ final class MacActivityController {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.awakeGrace + 1))
             guard let self, let seen = self.lastSeen else { return }
-            self.refresh(selected: nil, activity: seen)
+            self.refresh(selected: nil, selection: self.selection, activity: seen)
         }
         announced()
     }
@@ -113,8 +115,9 @@ final class MacActivityController {
     /// end it once Keep awake is off there or its state is gone, and refresh
     /// the widget: the activity's Mac while one runs, else the selected Mac
     /// (`selected`, nil while it is connecting). Switching Macs never ends it.
-    func refresh(selected: Seen?, activity seen: Seen?) {
+    func refresh(selected: Seen?, selection: (id: String?, name: String)?, activity seen: Seen?) {
         if let selected { lastSelected = selected }
+        if let selection { self.selection = selection }
         if let activity {
             guard let seen else { announced(); return }
             lastSeen = seen
@@ -122,7 +125,7 @@ final class MacActivityController {
             update(activity, seen)
             // Once it has ended the widget is back to the selected Mac.
             if endedIDs.contains(activity.id) {
-                if let selected = selected ?? lastSelected { writeSnapshot(selected) }
+                writeSnapshot(selectedForWidget(selected))
             } else {
                 writeSnapshot(seen)
             }
@@ -131,6 +134,15 @@ final class MacActivityController {
             writeSnapshot(selected)
         }
         announced()
+    }
+
+    /// What the widget shows once the activity is gone: the selected Mac as last seen, but never another
+    /// Mac's (during a switch the new one may still be connecting): then just its name, not reachable.
+    private func selectedForWidget(_ selected: Seen?) -> Seen {
+        if let selected { return selected }
+        let id = selection?.id
+        if let last = lastSelected, last.macID == id { return last }
+        return Seen(macID: id, macName: selection?.name ?? "Your Mac", reachable: false, lastHeard: nil, state: nil, sessions: [])
     }
 
     private func update(_ activity: Activity<MacActivityAttributes>, _ seen: Seen) {

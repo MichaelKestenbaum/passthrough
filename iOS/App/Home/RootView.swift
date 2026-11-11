@@ -170,7 +170,7 @@ extension RootView {
                 controller.clear()   // that Mac was forgotten
             }
         }
-        controller.refresh(selected: selected, activity: activity)
+        controller.refresh(selected: selected, selection: (shell.selectedMacID, shell.selectedMacName), activity: activity)
     }
 }
 

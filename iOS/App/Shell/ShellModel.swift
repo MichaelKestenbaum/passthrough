@@ -1046,7 +1046,8 @@ extension ShellModel {
                                       recency: [:], pinned: watchPinned, limit: MacWatcher.limit)
         watcher.demoShow(Dictionary(uniqueKeysWithValues: ids.map { id in
             (id, MacWatcher.Seen(sessions: Self.demoSessions[id] ?? Self.demoBaseSessions(id, now: now),
-                                 state: MacState(awake: true, battery: 0.9, charging: true, control: true),
+                                 state: id == "demo-mac" ? MacState(awake: true, battery: 0.64, charging: false, minutesLeft: 190, batteryFloor: 0.2, control: true)
+                                                 : MacState(awake: true, battery: 0.9, charging: true, control: true),
                                  reachable: true, lastHeard: Date(timeIntervalSince1970: now)))
         }))
     }

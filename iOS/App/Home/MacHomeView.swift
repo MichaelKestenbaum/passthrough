@@ -55,7 +55,7 @@ struct MacHomeView: View {
             .navigationBarTitleDisplayMode(shell.macs.count > 1 ? .inline : .large)
             .toolbarTitleMenu {
                 if shell.macs.count > 1 {
-                    Picker("Mac", selection: $shell.selectedMacID) {
+                    Picker("Mac", selection: Binding(get: { shell.selectedMacID }, set: { if let id = $0 { shell.select(id) } })) {
                         ForEach(shell.macs, id: \.macID) { Text($0.macName).tag(Optional($0.macID)) }
                     }
                 }

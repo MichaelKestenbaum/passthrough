@@ -48,7 +48,7 @@ struct RemoteShellCard: View {
 
     private var macPicker: some View {
         Menu {
-            Picker("Mac", selection: $shell.selectedMacID) {
+            Picker("Mac", selection: Binding(get: { shell.selectedMacID }, set: { if let id = $0 { shell.select(id) } })) {
                 ForEach(shell.macs, id: \.macID) { mac in
                     Text(mac.macName).tag(Optional(mac.macID))
                 }

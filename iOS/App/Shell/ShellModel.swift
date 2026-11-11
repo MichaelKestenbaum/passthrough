@@ -39,7 +39,8 @@ final class ShellModel: ObservableObject {
     }
 
     @Published var macs: [ShellCredential] = []
-    @Published var selectedMacID: String? {
+    /// Changed by the UI only through `select(_:)`.
+    @Published private(set) var selectedMacID: String? {
         didSet { if selectedMacID != oldValue, !applyingRefresh { connect() } }
     }
     @Published private(set) var reach: Reach = .noAccess {
@@ -57,8 +58,11 @@ final class ShellModel: ObservableObject {
     @Published private(set) var history: [ShellHistoryEntry] = []
     /// The Mac has answered a history request since this Mac was selected.
     @Published private(set) var historyLoaded = false
-    @Published var openTabs: [String] = []
-    @Published var activeSession: String?
+    @Published var openTabs: [String] = [] { didSet { rememberTabs() } }
+    @Published var activeSession: String? { didSet { rememberTabs() } }
+    /// Each Mac's open tabs and active tab, so switching back (or relaunching)
+    /// brings them back; kept in step with `openTabs`/`activeSession`.
+    private(set) var tabMemory: MacTabMemory
     /// Sessions that have ended: their tabs show a read-only log of their output.
     @Published private(set) var ended = ShellEndedSessions()
     /// The last thing the Mac refused (too many sessions, no such session…).
@@ -104,6 +108,8 @@ final class ShellModel: ObservableObject {
 
     private static let manualAddressPrefix = "shell.manualAddress."
     private static let connectModeKey = "shell.connectMode"
+    private static let tabMemoryKey = "shell.tabMemory"
+    private static let lastMacKey = "shell.lastMac"
 
     private var client: ShellClient?
     private var clientMacID: String?
@@ -116,6 +122,9 @@ final class ShellModel: ObservableObject {
     /// Bumped per `ShellClient`, so a replaced client's late events are dropped.
     private var generation = 0
     private var applyingRefresh = false
+    /// Set while tabs are cleared or restored for a Mac change: those aren't
+    /// changes the user made to the Mac whose tabs are showing.
+    private var holdingTabMemory = false
     /// A relock was requested because a key read needed authentication; until a
     /// refresh reads every key, another failure shows `.keyUnavailable` instead of looping.
     private var relockRequested = false
@@ -150,6 +159,8 @@ final class ShellModel: ObservableObject {
 
     init() {
         connectMode = UserDefaults.standard.string(forKey: Self.connectModeKey).flatMap(ShellConnectMode.init(rawValue:)) ?? .automatic
+        tabMemory = UserDefaults.standard.data(forKey: Self.tabMemoryKey)
+            .flatMap { try? JSONDecoder().decode(MacTabMemory.self, from: $0) } ?? MacTabMemory()
         // Sockets don't survive suspension; leave cleanly, and `refresh` on return reconnects.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dropConnection() }
@@ -175,6 +186,9 @@ final class ShellModel: ObservableObject {
         let context = lock.context
         ShellKeyVault.adoptPending(from: registry, context: context)
         ShellKeyVault.prune(keeping: Set(clients.map(\.id)), context: context)
+        var memory = tabMemory
+        memory.keepOnly(Set(clients.map(\.id)))
+        if memory != tabMemory { tabMemory = memory; saveTabMemory() }
         var anyLocked = false
         let built = ShellCredentials.build(clients: granting, phoneID: registry.phoneID, key: { id in
             switch ShellKeyVault.read(macID: id, context: context) {
@@ -200,7 +214,10 @@ final class ShellModel: ObservableObject {
         let previous = macs.first { $0.macID == clientMacID }
         applyingRefresh = true
         macs = built
-        if selectedMacID.map({ id in !built.contains { $0.macID == id } }) ?? true { selectedMacID = built.first?.macID }
+        if selectedMacID.map({ id in !built.contains { $0.macID == id } }) ?? true {
+            selectedMacID = MacProfiles.reopen(lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
+                                               available: built.map(\.macID))
+        }
         applyingRefresh = false
 
         guard let current = built.first(where: { $0.macID == selectedMacID }) else {
@@ -270,7 +287,18 @@ final class ShellModel: ObservableObject {
         macs[i].addresses = ShellCredentials.addresses(granted: granted[macID] ?? [], manual: trimmed)
     }
 
-    /// The phone forgot this Mac: drop its key, address and any connection to it.
+    /// Makes `macID` the selected Mac: the only way the UI switches. The tabs
+    /// showing are kept for the Mac being left (nothing is sent to it), and
+    /// the new Mac's own tabs come back once `connect` dials it.
+    func select(_ macID: String) {
+        guard macID != selectedMacID else { return }
+        if let current = clientMacID { tabMemory.save(MacTabs(openTabs: openTabs, active: activeSession), for: current) }
+        saveTabMemory()
+        UserDefaults.standard.set(macID, forKey: Self.lastMacKey)
+        selectedMacID = macID
+    }
+
+    /// The phone forgot this Mac: drop its key, address, tabs and any connection to it.
     func forget(macID: String) {
         ShellKeyVault.delete(macID: macID, context: lock?.isUnlocked == true ? lock?.context : nil)
         UserDefaults.standard.removeObject(forKey: Self.manualAddressPrefix + macID)
@@ -284,6 +312,11 @@ final class ShellModel: ObservableObject {
         var heard = Self.lastHeardStore
         heard[macID] = nil
         UserDefaults.standard.set(heard, forKey: Self.lastHeardKey)
+        tabMemory.forget(macID)
+        saveTabMemory()
+        if UserDefaults.standard.string(forKey: Self.lastMacKey) == macID {
+            UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
+        }
     }
 
     func forgetAll() {
@@ -294,6 +327,9 @@ final class ShellModel: ObservableObject {
         granted = [:]
         clear(.noAccess)
         UserDefaults.standard.removeObject(forKey: Self.lastHeardKey)
+        tabMemory = MacTabMemory()
+        UserDefaults.standard.removeObject(forKey: Self.tabMemoryKey)
+        UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
     }
 
     // MARK: Connection
@@ -312,7 +348,7 @@ final class ShellModel: ObservableObject {
             reach = macs.isEmpty ? .noAccess : reach
             return
         }
-        if clientMacID != credential.macID { resetSessions() }
+        if clientMacID != credential.macID { switchSessions(to: credential.macID) }
         generation += 1
         let gen = generation
         clientTriesIroh = connectMode == .automatic && credential.irohID.map(IrohInfo.isValidID) == true
@@ -643,7 +679,36 @@ final class ShellModel: ObservableObject {
         finishTranscript(nil)
     }
 
+    /// Another Mac's turn: clears what the last one said and brings back the
+    /// new one's tabs, which `.ready` re-attaches as after any reconnect.
+    private func switchSessions(to macID: String) {
+        resetSessions()
+        let tabs = tabMemory.tabs(for: macID)
+        holdingTabMemory = true
+        openTabs = tabs.openTabs
+        activeSession = tabs.active
+        holdingTabMemory = false
+    }
+
+    /// Keeps the tabs showing as the connected Mac's.
+    private func rememberTabs() {
+        guard !holdingTabMemory, let mac = clientMacID else { return }
+        let tabs = MacTabs(openTabs: openTabs, active: activeSession)
+        guard tabMemory.tabs(for: mac) != tabs else { return }
+        tabMemory.save(tabs, for: mac)
+        saveTabMemory()
+    }
+
+    private func saveTabMemory() {
+        guard let data = try? JSONEncoder().encode(tabMemory) else { return }
+        UserDefaults.standard.set(data, forKey: Self.tabMemoryKey)
+    }
+
+    /// Clears everything the connected Mac said, tabs included (its tabs stay
+    /// in `tabMemory`).
     private func resetSessions() {
+        holdingTabMemory = true
+        defer { holdingTabMemory = false }
         openWhenReady = false
         macState = nil
         timeline = nil
@@ -782,15 +847,48 @@ extension ShellModel {
     /// The demo session waiting on a question.
     fileprivate static let demoAskingID = "8F3A1C2E-5B7D-4E60-8F21-3C4D5E6F7A8B"
 
+    /// The second demo Mac's session waiting on a question.
+    fileprivate static let demoStudioAskingID = "2C7E9B14-0A3D-4F5E-9B61-7D8E9FA0B1C2"
+
+    /// Each demo Mac's sessions, kept across switches so opened ones stay.
+    private static var demoSessions: [String: [ShellSessionInfo]] = [:]
+
+    private static func demoBaseSessions(_ macID: String, now: Double) -> [ShellSessionInfo] {
+        if macID == "demo-mac-2" {
+            return [
+                ShellSessionInfo(id: "studio-1", title: "zsh — ~/music", startedAt: now - 3000, lastOutputAt: now - 300, running: true),
+                ShellSessionInfo(id: demoStudioAskingID, title: "codex", startedAt: now - 1200, lastOutputAt: now - 90, running: true,
+                                 waiting: "Allow running `swift test`?"),
+            ]
+        }
+        return [
+            ShellSessionInfo(id: demoAskingID, title: "claude", startedAt: now - 1900, lastOutputAt: now - 40, running: true,
+                             waiting: "Do you want to make this edit to HomeView.swift?"),
+            ShellSessionInfo(id: "demo-1", title: "zsh — ~/dev/passthrough", startedAt: now - 760, lastOutputAt: now - 20, running: true),
+            ShellSessionInfo(id: "demo-2", title: "npm run build", startedAt: now - 5400, lastOutputAt: now - 3600, running: false, exitStatus: 0),
+        ]
+    }
+
     fileprivate func applyDemo(_ state: String) {
         let now = Date().timeIntervalSince1970
         guard state != "noAccess" else { return clear(.noAccess) }
         applyingRefresh = true
-        macs = [ShellCredential(macID: "demo-mac", macName: "My MacBook Pro", certSHA256: "", shellKey: Data(),
-                                phoneID: "demo", port: 0, addresses: [])]
-        selectedMacID = "demo-mac"
+        macs = [
+            ShellCredential(macID: "demo-mac", macName: "MacBook Pro", certSHA256: "", shellKey: Data(),
+                            phoneID: "demo", port: 0, addresses: []),
+            ShellCredential(macID: "demo-mac-2", macName: "Home Studio", certSHA256: "", shellKey: Data(),
+                            phoneID: "demo", port: 0, addresses: []),
+        ]
+        if selectedMacID.map({ id in !macs.contains { $0.macID == id } }) ?? true {
+            selectedMacID = MacProfiles.reopen(lastUsed: UserDefaults.standard.string(forKey: Self.lastMacKey),
+                                               available: macs.map(\.macID))
+        }
         applyingRefresh = false
-        clientMacID = "demo-mac"
+        guard let mac = selectedMacID else { return }
+        if clientMacID != mac {
+            switchSessions(to: mac)
+            clientMacID = mac
+        }
         switch state {
         case "connecting": reach = .connecting
         case "unreachable": reach = .unreachable
@@ -807,12 +905,7 @@ extension ShellModel {
             macState = MacState(awake: false, awakeStopped: MacState.stoppedBattery, battery: 0.2, charging: false, batteryFloor: 0.2, control: true)
         }
         if state == "ready", sessions.isEmpty {
-            sessions = [
-                ShellSessionInfo(id: Self.demoAskingID, title: "claude", startedAt: now - 1900, lastOutputAt: now - 40, running: true,
-                                 waiting: "Do you want to make this edit to HomeView.swift?"),
-                ShellSessionInfo(id: "demo-1", title: "zsh — ~/dev/passthrough", startedAt: now - 760, lastOutputAt: now - 20, running: true),
-                ShellSessionInfo(id: "demo-2", title: "npm run build", startedAt: now - 5400, lastOutputAt: now - 3600, running: false, exitStatus: 0),
-            ]
+            sessions = Self.demoSessions[mac] ?? Self.demoBaseSessions(mac, now: now)
             ended.apply(sessions)
         }
         if state == "ready" || state == "empty" {
@@ -858,9 +951,10 @@ extension ShellModel {
     }
 
     fileprivate func demoOpen() {
-        let id = "demo-\(sessions.count + 1)"
+        let id = "\(selectedMacID ?? "demo")-new-\(sessions.count + 1)"
         sessions.append(ShellSessionInfo(id: id, title: "zsh — ~", startedAt: Date().timeIntervalSince1970,
                                          lastOutputAt: Date().timeIntervalSince1970, running: true))
+        if let mac = selectedMacID { Self.demoSessions[mac] = sessions }
         if !openTabs.contains(id) { openTabs.append(id) }
         streamStarting.send((id, false))
         activeSession = id

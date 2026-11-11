@@ -252,7 +252,7 @@ struct TerminalScreen: View {
         .accessibilityHint("Touch and hold for more")
         .contextMenu {
             if isEnded {
-                Button { closeTab(id) } label: { Label("Close tab", systemImage: "xmark") }
+                Button { closeTab(id) } label: { Label("Remove", systemImage: "trash") }
             } else {
                 Button(role: .destructive) { shell.close(id) } label: { Label("End session", systemImage: "xmark") }
             }

@@ -91,7 +91,7 @@ struct MacHomeView: View {
 
     /// Shells that went quiet on a question; the answer is typed in the terminal, as always.
     @ViewBuilder private var needsYou: some View {
-        let waiting = shell.sessions.filter(\.isAsking)
+        let waiting = shell.visibleSessions.filter(\.isAsking)
         ForEach(waiting, id: \.id) { session in
             Button { router.terminal = .attach(session.id) } label: {
                 HStack(spacing: 12) {
@@ -123,7 +123,7 @@ struct MacHomeView: View {
 
     /// Keep awake and the VPN show as the Mac last said; they only change while it's reachable.
     private var state: MacState? { shell.macState }
-    private var runningShells: Int { shell.sessions.filter(\.running).count }
+    private var runningShells: Int { shell.visibleSessions.filter(\.running).count }
 
     /// Internet first (this phone's own, always there), then what's on the
     /// Mac. A reason shared by several switches shows once, right under them.
@@ -213,7 +213,7 @@ struct MacHomeView: View {
             if on {
                 shell.control(.awake(true))
                 MacActivityController.shared.keepAwakeAsked(.init(macID: shell.selectedMacID, macName: macName, reachable: true,
-                                                                  lastHeard: nil, state: state, sessions: shell.sessions))
+                                                                  lastHeard: nil, state: state, sessions: shell.visibleSessions))
             } else if runningShells > 0 {
                 confirmSleep = true
             } else {
@@ -405,14 +405,14 @@ struct MacHomeView: View {
                 HStack {
                     Text("Shells").font(.headline)
                     Spacer()
-                    if !shell.sessions.isEmpty {
+                    if !shell.visibleSessions.isEmpty {
                         Button("See all") { tab = .shells }
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(PTColor.tintText)
                             .frame(minHeight: 44)
                     }
                 }
-                if shell.sessions.isEmpty {
+                if shell.visibleSessions.isEmpty {
                     Text("Nothing running. Start a shell to run commands on \(macName).")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -422,7 +422,7 @@ struct MacHomeView: View {
                 } else {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
                         VStack(spacing: 0) {
-                            ForEach(Self.recent(shell.sessions), id: \.id) { session in
+                            ForEach(Self.recent(shell.visibleSessions), id: \.id) { session in
                                 sessionRow(session, now: context.date)
                             }
                         }

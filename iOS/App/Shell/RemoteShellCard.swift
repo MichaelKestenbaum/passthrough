@@ -94,7 +94,7 @@ struct RemoteShellCard: View {
         case .locked, .needsPasscode, .keyUnavailable:
             notice(shell.reachMessage ?? "", icon: "exclamationmark.triangle.fill", tint: PTColor.attention)
         case .ready:
-            if shell.sessions.isEmpty {
+            if shell.visibleSessions.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("No sessions open. Start one to run commands on \(selectedMacName).")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -107,7 +107,7 @@ struct RemoteShellCard: View {
             } else {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(shell.sessions, id: \.id) { session in
+                        ForEach(shell.visibleSessions, id: \.id) { session in
                             row(session, now: context.date)
                         }
                     }
@@ -175,7 +175,11 @@ struct RemoteShellCard: View {
             .accessibilityHint("Opens the terminal")
             Menu {
                 Button { router.terminal = .attach(session.id) } label: { Label("Open", systemImage: "terminal") }
-                Button(role: .destructive) { shell.close(session.id) } label: { Label("End session", systemImage: "xmark") }
+                if session.running {
+                    Button(role: .destructive) { shell.close(session.id) } label: { Label("End session", systemImage: "xmark") }
+                } else {
+                    Button(role: .destructive) { shell.remove(session.id) } label: { Label("Remove", systemImage: "trash") }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.body)

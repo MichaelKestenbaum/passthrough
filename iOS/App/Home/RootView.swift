@@ -102,12 +102,12 @@ struct RootView: View {
 
 extension RootView {
     /// Shells waiting on a question: the Mac tab's badge.
-    private var asking: Int { model.shell.sessions.filter(\.isAsking).count }
+    private var asking: Int { model.shell.visibleSessions.filter(\.isAsking).count }
 
     private func seen(reachable: Bool) -> MacActivityController.Seen {
         let shell = model.shell
         return .init(macID: shell.selectedMacID, macName: shell.selectedMacName, reachable: reachable,
-                     lastHeard: shell.lastHeard, state: shell.macState, sessions: shell.sessions)
+                     lastHeard: shell.lastHeard, state: shell.macState, sessions: shell.visibleSessions)
     }
 
     private func runPendingLink() {

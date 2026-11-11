@@ -63,6 +63,13 @@ final class ShellModel: ObservableObject {
     /// Each Mac's open tabs and active tab, so switching back (or relaunching)
     /// brings them back; kept in step with `openTabs`/`activeSession`.
     private(set) var tabMemory: MacTabMemory
+    /// Finished sessions removed from this phone, per Mac (the Mac keeps listing them for a while).
+    @Published private(set) var hiddenSessions: ShellHiddenSessions
+    /// The selected Mac's sessions minus the finished ones removed here.
+    var visibleSessions: [ShellSessionInfo] {
+        guard let mac = clientMacID ?? selectedMacID else { return sessions }
+        return hiddenSessions.visible(sessions, on: mac)
+    }
     /// Sessions that have ended: their tabs show a read-only log of their output.
     @Published private(set) var ended = ShellEndedSessions()
     /// The last thing the Mac refused (too many sessions, no such session…).
@@ -110,6 +117,7 @@ final class ShellModel: ObservableObject {
     private static let connectModeKey = "shell.connectMode"
     private static let tabMemoryKey = "shell.tabMemory"
     private static let lastMacKey = "shell.lastMac"
+    private static let hiddenSessionsKey = "shell.hiddenSessions"
 
     private var client: ShellClient?
     private var clientMacID: String?
@@ -161,6 +169,8 @@ final class ShellModel: ObservableObject {
         connectMode = UserDefaults.standard.string(forKey: Self.connectModeKey).flatMap(ShellConnectMode.init(rawValue:)) ?? .automatic
         tabMemory = UserDefaults.standard.data(forKey: Self.tabMemoryKey)
             .flatMap { try? JSONDecoder().decode(MacTabMemory.self, from: $0) } ?? MacTabMemory()
+        hiddenSessions = UserDefaults.standard.data(forKey: Self.hiddenSessionsKey)
+            .flatMap { try? JSONDecoder().decode(ShellHiddenSessions.self, from: $0) } ?? ShellHiddenSessions()
         // Sockets don't survive suspension; leave cleanly, and `refresh` on return reconnects.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dropConnection() }
@@ -314,6 +324,8 @@ final class ShellModel: ObservableObject {
         UserDefaults.standard.set(heard, forKey: Self.lastHeardKey)
         tabMemory.forget(macID)
         saveTabMemory()
+        hiddenSessions.apply(listed: [], on: macID)
+        saveHiddenSessions()
         if UserDefaults.standard.string(forKey: Self.lastMacKey) == macID {
             UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
         }
@@ -330,6 +342,8 @@ final class ShellModel: ObservableObject {
         tabMemory = MacTabMemory()
         UserDefaults.standard.removeObject(forKey: Self.tabMemoryKey)
         UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
+        hiddenSessions = ShellHiddenSessions()
+        UserDefaults.standard.removeObject(forKey: Self.hiddenSessionsKey)
     }
 
     // MARK: Connection
@@ -424,10 +438,29 @@ final class ShellModel: ObservableObject {
     /// Ends a running session, or just closes the tab of an ended one (the
     /// Mac would refuse to close it again).
     func close(_ id: String) {
-        if !ended.isEnded(id) { client?.close(id) }
+        if ended.isEnded(id) || sessions.first(where: { $0.id == id })?.running == false { return remove(id) }
+        client?.close(id)
         ended.forget(id)
         openTabs.removeAll { $0 == id }
         if activeSession == id { activeSession = nil }
+    }
+
+    /// Removes a finished session from this phone: hides it for this Mac and
+    /// drops its tab. Never sends `close` (the Mac ignores it for a session
+    /// that has ended), so it works while the Mac is out of reach.
+    func remove(_ id: String) {
+        if let mac = clientMacID ?? selectedMacID {
+            hiddenSessions.hide(id, on: mac)
+            saveHiddenSessions()
+        }
+        ended.forget(id)
+        openTabs.removeAll { $0 == id }
+        if activeSession == id { activeSession = nil }
+    }
+
+    private func saveHiddenSessions() {
+        guard let data = try? JSONEncoder().encode(hiddenSessions) else { return }
+        UserDefaults.standard.set(data, forKey: Self.hiddenSessionsKey)
     }
 
     func loadHistory() { client?.requestHistory() }
@@ -558,6 +591,11 @@ final class ShellModel: ObservableObject {
         case let .sessions(list):
             sessions = list
             let ids = Set(list.map(\.id))
+            if let mac = clientMacID ?? selectedMacID {
+                var hidden = hiddenSessions
+                hidden.apply(listed: Array(ids), on: mac)
+                if hidden != hiddenSessions { hiddenSessions = hidden; saveHiddenSessions() }
+            }
             // The ended session on screen keeps its tab (and log) until the user closes it.
             let kept = activeSession.flatMap { ended.isEnded($0) ? $0 : nil }
             ended.apply(list, keeping: Set([kept].compactMap { $0 }))

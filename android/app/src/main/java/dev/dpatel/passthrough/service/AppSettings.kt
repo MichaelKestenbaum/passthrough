@@ -58,6 +58,18 @@ class AppSettings(context: Context) {
         prefs.edit().apply { keys.forEach { remove(it) } }.apply()
     }
 
+    /** Each Mac's open shell tabs (MacTabMemory JSON); same key as the iOS app. */
+    fun shellTabMemory(): String? = prefs.getString(SHELL_TAB_MEMORY, null)
+    fun setShellTabMemory(json: String?) {
+        prefs.edit().apply { if (json == null) remove(SHELL_TAB_MEMORY) else putString(SHELL_TAB_MEMORY, json) }.apply()
+    }
+
+    /** The Mac the shell last showed, reopened on launch; same key as the iOS app. */
+    fun shellLastMac(): String? = prefs.getString(SHELL_LAST_MAC, null)
+    fun setShellLastMac(macID: String?) {
+        prefs.edit().apply { if (macID == null) remove(SHELL_LAST_MAC) else putString(SHELL_LAST_MAC, macID) }.apply()
+    }
+
     companion object {
         const val DEVICE_NAME = "device.name"
         const val CELLULAR_ONLY = "settings.cellularOnly"
@@ -70,6 +82,8 @@ class AppSettings(context: Context) {
         const val SHELL_CONNECT_MODE = "shell.connectMode"
         /** Same key as the iOS app. */
         const val CAPTURE_PROTECTION = "captureProtection"
+        const val SHELL_TAB_MEMORY = "shell.tabMemory"
+        const val SHELL_LAST_MAC = "shell.lastMac"
     }
 }
 

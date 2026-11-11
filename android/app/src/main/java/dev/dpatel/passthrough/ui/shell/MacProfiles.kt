@@ -33,6 +33,10 @@ data class MacTabMemory(val byMac: Map<String, MacTabs> = emptyMap()) {
 
     companion object {
         fun fromJson(json: String): MacTabMemory = Json.decodeFromString(MacTabMemory.serializer(), json)
+
+        /** What was stored, or nothing remembered when there is none or it can't be read. */
+        fun stored(json: String?): MacTabMemory =
+            json?.let { runCatching { fromJson(it) }.getOrNull() } ?: MacTabMemory()
     }
 }
 

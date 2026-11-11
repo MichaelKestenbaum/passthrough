@@ -32,6 +32,14 @@ class MacProfilesTests {
         assertTrue(memory.byMac.isEmpty())
     }
 
+    @Test fun tabMemoryStoredToleratesMissingOrUnreadable() {
+        val memory = MacTabMemory().save(MacTabs(listOf("a", "b"), "b"), "m1")
+        assertEquals(memory, MacTabMemory.stored(memory.toJson()))
+        assertEquals(MacTabMemory(), MacTabMemory.stored(null))
+        assertEquals(MacTabMemory(), MacTabMemory.stored("not json"))
+        assertEquals(MacTabMemory(), MacTabMemory.stored("{\"byMac\":42}"))
+    }
+
     @Test fun hiddenPrunedWhenNoLongerListed() {
         var hidden = ShellHiddenSessions()
         hidden = hidden.hide("s1", "m1")

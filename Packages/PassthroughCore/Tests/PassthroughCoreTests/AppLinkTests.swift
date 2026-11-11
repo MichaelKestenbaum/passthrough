@@ -39,8 +39,11 @@ final class AppLinkTests: XCTestCase {
         XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: "a", paired: paired), .mac("a"))
         XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: "gone", paired: paired), .current)
         XCTAssertEqual(AppLink.session(id, mac: nil).target(activityMac: nil, paired: paired), .current)
+        // An unqualified Mac link (an older activity with no question waiting): the activity's Mac too.
+        XCTAssertEqual(AppLink.mac(nil).target(activityMac: "a", paired: paired), .mac("a"))
+        XCTAssertEqual(AppLink.mac(nil).target(activityMac: "gone", paired: paired), .current)
+        XCTAssertEqual(AppLink.mac(nil).target(activityMac: nil, paired: paired), .current)
         // Other unqualified links: the Mac selected now.
-        XCTAssertEqual(AppLink.mac(nil).target(activityMac: "a", paired: paired), .current)
         XCTAssertEqual(AppLink.keepAwake.target(activityMac: "a", paired: paired), .current)
         XCTAssertEqual(AppLink.vpnOn.target(activityMac: nil, paired: []), .current)
     }

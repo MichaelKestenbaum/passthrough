@@ -126,7 +126,8 @@ extension RootView {
         case .session(let id, _):
             // The Mac first: its tabs come back, and the terminal's tab is kept as that Mac's.
             // A Mac no longer paired: nothing to attach on any other; just the Mac tab.
-            guard selectLinked(link) else {
+            // Nor on a paired Mac without a usable shell credential (internet only, or its key is gone).
+            guard selectLinked(link), shell.selectedMac != nil else {
                 tab = .mac
                 router.showThisPhone = false
                 return links.done()
@@ -160,7 +161,12 @@ extension RootView {
                                  paired: model.pairedClients.map(\.id))
         switch target {
         case .current: return true
-        case .mac(let macID): model.shell.select(macID); return true
+        case .mac(let macID):
+            // A terminal, screen or history still open is the Mac being left's: close it
+            // first, or what's typed into it (a Screen Sharing login) goes to the new one.
+            if macID != model.shell.selectedMacID { router.dismissAll() }
+            model.shell.select(macID)
+            return true
         case .rejected: return false
         }
     }

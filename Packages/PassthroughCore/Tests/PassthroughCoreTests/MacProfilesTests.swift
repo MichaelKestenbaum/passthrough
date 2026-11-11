@@ -40,6 +40,10 @@ final class MacProfilesTests: XCTestCase {
         hidden.hide("s9", on: "m2")
         hidden.forget("m2")
         XCTAssertTrue(hidden.byMac.isEmpty)
+        hidden.hide("s1", on: "m1")
+        hidden.hide("s2", on: "m2")
+        hidden.keepOnly(["m1"])
+        XCTAssertEqual(Set(hidden.byMac.keys), ["m1"])
     }
 
     func testOnlyFinishedSessionsCanBeRemoved() {

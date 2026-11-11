@@ -60,6 +60,7 @@ final class MacActivityController {
     func adoptUntagged(selectedMacID: String?, paired: [(id: String, name: String)]) {
         let live = Set(Activity<MacActivityAttributes>.activities.map(\.id))
         if adopted.keys.contains(where: { !live.contains($0) }) { adopted = adopted.filter { live.contains($0.key) } }
+        endedIDs.formIntersection(live)   // once the system has dropped one, it can't come back
         guard let activity, activity.attributes.macID == nil, adopted[activity.id] == nil,
               let mac = MacProfiles.adoptedMac(activityMacName: activity.attributes.macName, paired: paired,
                                                selected: selectedMacID) else { return }
@@ -134,6 +135,9 @@ final class MacActivityController {
         } else if let selected {
             lastSeen = selected
             writeSnapshot(selected)
+        } else if self.selection != nil {
+            // The selected Mac is connecting or without its key: never leave the widget on the Mac before it.
+            writeSnapshot(selectedForWidget(nil))
         }
         announced()
     }
@@ -148,10 +152,8 @@ final class MacActivityController {
     }
 
     private func update(_ activity: Activity<MacActivityAttributes>, _ seen: Seen) {
-        guard let state = seen.state else {
-            end(activity, nil)
-            return
-        }
+        // Out of reach: as it last said, marked as such. Checked before the state: right
+        // after a switch back to this Mac nothing has been heard yet, and that's no reason to end it.
         guard seen.reachable else {
             // As it last said, marked as such; the stale date stays.
             var last = activity.content.state
@@ -161,6 +163,8 @@ final class MacActivityController {
             Task { await activity.update(content) }
             return
         }
+        // Reachable, but its state hasn't come yet (just connected): keep what it shows.
+        guard let state = seen.state else { return }
         if state.awake != true {
             if let until = awaitingAwakeUntil, until > .now { return }
             awaitingAwakeUntil = nil

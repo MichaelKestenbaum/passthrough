@@ -87,6 +87,11 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
     val sessions: StateFlow<List<ShellSessionInfo>> = _sessions.asStateFlow()
     /** Finished sessions removed from this phone, per Mac (the Mac keeps listing them for a while). */
     private var hiddenSessions = ShellHiddenSessions.stored(Runtime.settings.shellHiddenSessions())
+    /**
+     * What each Mac switched away from had said ended, in memory only: a remembered finished
+     * tab can still be removed after switching back while that Mac is out of reach.
+     */
+    private val endedByMac = mutableMapOf<String, ShellEndedSessions>()
     private val _visibleSessions = MutableStateFlow<List<ShellSessionInfo>>(emptyList())
     /** The selected Mac's sessions minus the finished ones removed here; what lists and badges show. */
     val visibleSessions: StateFlow<List<ShellSessionInfo>> = _visibleSessions.asStateFlow()
@@ -491,6 +496,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         val credential = current()
         if (credential == null) {
             stopRedialing()
+            // Locked or without a passcode, a switch keeps that state: unlocking refreshes.
+            // (`clear` reset the key facts, which would otherwise say "no access".)
+            val reach = _reach.value
+            if (reach == ShellReach.LOCKED || reach == ShellReach.NEEDS_PASSCODE) return
             // The same per-Mac key facts the last refresh used, so a locked or lost key keeps its recovery state.
             _selectedMacID.value?.let { mac -> return idleOnMacWithoutShell(keyFacts.reachWithoutCredential(mac)) }
             if (_macs.value.isEmpty()) _reach.value = ShellReach.NO_ACCESS
@@ -608,7 +617,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         connection?.resize(cols, rows)
     }
 
-    /** Ends a running session on the Mac, or just closes the tab of an ended one (the Mac would refuse to close it again). */
+    /**
+     * Ends a running session on the Mac. A finished one is removed instead ([remove]): its tab
+     * closes and it's hidden on this phone, since the Mac would refuse to close it again.
+     */
     fun close(id: String) {
         if (hiddenSessions.canRemove(id, _ended.value, _sessions.value)) return remove(id)
         connection?.close(id)
@@ -939,7 +951,10 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
      * becomes [macID] here, so nothing is remembered under the Mac being left.
      */
     private fun switchSessions(macID: String) {
+        // Kept so a finished tab can still be removed after switching back while that Mac is out of reach.
+        clientMacID?.let { endedByMac[it] = _ended.value }
         resetSessions()
+        _ended.value = endedByMac[macID] ?: ShellEndedSessions()
         clientMacID = macID
         val tabs = _tabMemory.value.tabs(macID)
         holdingTabMemory = true
@@ -977,6 +992,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Drops tab memory and the last-used Mac for Macs no longer paired. */
     private fun forgetUnpaired(paired: Set<String>) {
+        endedByMac.keys.retainAll(paired)
         val kept = _tabMemory.value.keepOnly(paired)
         if (kept != _tabMemory.value) {
             _tabMemory.value = kept

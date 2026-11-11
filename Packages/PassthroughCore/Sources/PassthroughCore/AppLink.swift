@@ -45,16 +45,18 @@ public enum AppLink: Equatable, Sendable {
         case rejected
     }
 
-    /// Where to carry this link out. A named Mac must be in `paired`. A session link
-    /// without one (from a Live Activity an older build started, which can't carry
-    /// its Mac) belongs to the running activity's Mac, `activityMac` (tagged or
-    /// adopted), when that is paired; any other link without one means the Mac selected now.
+    /// Where to carry this link out. A named Mac must be in `paired`. A `.mac` or
+    /// `.session` link without one (from a Live Activity an older build started,
+    /// which can't carry its Mac, or a widget snapshot from before Macs were named)
+    /// belongs to the running activity's Mac, `activityMac` (tagged or adopted), when
+    /// that is paired: while an activity runs, the widget shows its Mac too. Otherwise
+    /// it means the Mac selected now.
     public func target(activityMac: String?, paired: [String]) -> Target {
         switch self {
         case .keepAwake, .vpnOn: return .current
         case .mac(let macID), .session(_, let macID):
             if let macID { return paired.contains(macID) ? .mac(macID) : .rejected }
-            if case .session = self, let activityMac, paired.contains(activityMac) { return .mac(activityMac) }
+            if let activityMac, paired.contains(activityMac) { return .mac(activityMac) }
             return .current
         }
     }

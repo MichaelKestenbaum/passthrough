@@ -184,6 +184,9 @@ final class ShellModel: ObservableObject {
                                     continuation: CheckedContinuation<[ShellReplayChunk]?, Never>)?
     private var observers: [NSObjectProtocol] = []
     private var watcherChanges: AnyCancellable?
+    /// What each Mac switched away from had said ended, in memory only: a remembered finished
+    /// tab can still be removed after switching back while that Mac is out of reach.
+    private var endedByMac: [String: ShellEndedSessions] = [:]
 
     init() {
         connectMode = UserDefaults.standard.string(forKey: Self.connectModeKey).flatMap(ShellConnectMode.init(rawValue:)) ?? .automatic
@@ -197,6 +200,11 @@ final class ShellModel: ObservableObject {
                 self?.dropConnection()
                 self?.watcher.stop()
             }
+        })
+        // The foreground refresh runs while the app still counts as in the background,
+        // when `updateWatcher` stops watches: start them once it is active.
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateWatcher() }
         })
         watcher.hiddenSessions = { [weak self] in self?.hiddenSessions ?? ShellHiddenSessions() }
         watcher.discovered = { [weak self] credential in
@@ -232,6 +240,7 @@ final class ShellModel: ObservableObject {
         var memory = tabMemory
         memory.keepOnly(Set(clients.map(\.id)))
         if memory != tabMemory { tabMemory = memory; saveTabMemory() }
+        forgetUnpaired(keeping: Set(pairedIDs))
         var locked: Set<String> = []
         let built = ShellCredentials.build(clients: granting, phoneID: registry.phoneID, key: { id in
             switch ShellKeyVault.read(macID: id, context: context) {
@@ -401,9 +410,15 @@ final class ShellModel: ObservableObject {
         if clientMacID == macID { dropConnection(); resetSessions() }
         applyingRefresh = true
         macs.removeAll { $0.macID == macID }
-        if selectedMacID == macID { selectedMacID = macs.first?.macID }
+        let stillPaired = paired.map(\.id).filter { $0 != macID }
+        if selectedMacID == macID {
+            // The last used Mac, else one with the shell, else any paired one (internet only).
+            let lastUsed = UserDefaults.standard.string(forKey: Self.lastMacKey)
+            selectedMacID = MacProfiles.selection(current: nil, lastUsed: lastUsed == macID ? nil : lastUsed,
+                                                  paired: stillPaired, withShell: macs.map(\.macID))
+        }
         applyingRefresh = false
-        if macs.isEmpty { clear(.noAccess) } else {
+        if macs.isEmpty { clear(.noAccess, paired: stillPaired) } else {
             // Before dialling: the new selection's watch (if any) ends first.
             updateWatcher()
             if client == nil { connect() }
@@ -416,8 +431,9 @@ final class ShellModel: ObservableObject {
         UserDefaults.standard.set(selectedAt, forKey: Self.lastSelectedKey)
         tabMemory.forget(macID)
         saveTabMemory()
-        hiddenSessions.apply(listed: [], on: macID)
+        hiddenSessions.forget(macID)
         saveHiddenSessions()
+        endedByMac[macID] = nil
         if UserDefaults.standard.string(forKey: Self.lastMacKey) == macID {
             UserDefaults.standard.removeObject(forKey: Self.lastMacKey)
         }
@@ -457,7 +473,7 @@ final class ShellModel: ObservableObject {
             if let mac = selectedMacID, reach != .locked, reach != .needsPasscode {
                 return idleOnMacWithoutShell(keyFacts.keyUnavailable(for: mac) ? .keyUnavailable : .noAccess)
             }
-            reach = macs.isEmpty ? .noAccess : reach
+            if macs.isEmpty, reach != .locked, reach != .needsPasscode { reach = .noAccess }
             return
         }
         if clientMacID != credential.macID { switchSessions(to: credential.macID) }
@@ -533,8 +549,8 @@ final class ShellModel: ObservableObject {
         client?.resize(cols: cols, rows: rows)
     }
 
-    /// Ends a running session, or just closes the tab of an ended one (the
-    /// Mac would refuse to close it again).
+    /// Ends a running session. A finished one is removed instead (`remove`):
+    /// its tab closes and it's hidden on this phone, since the Mac would refuse to close it again.
     func close(_ id: String) {
         if hiddenSessions.canRemove(id, ended: ended, sessions: sessions) { return remove(id) }
         client?.close(id)
@@ -819,7 +835,10 @@ final class ShellModel: ObservableObject {
     /// Another Mac's turn: clears what the last one said and brings back the
     /// new one's tabs, which `.ready` re-attaches as after any reconnect.
     private func switchSessions(to macID: String) {
+        // Kept so a finished tab can still be removed after switching back while that Mac is out of reach.
+        if let left = clientMacID { endedByMac[left] = ended }
         resetSessions()
+        ended = endedByMac[macID] ?? ShellEndedSessions()
         let tabs = tabMemory.tabs(for: macID)
         holdingTabMemory = true
         openTabs = tabs.openTabs
@@ -851,6 +870,20 @@ final class ShellModel: ObservableObject {
         guard tabMemory.tabs(for: mac) != tabs else { return }
         tabMemory.save(tabs, for: mac)
         saveTabMemory()
+    }
+
+    /// Drops what's kept per Mac for Macs no longer paired (the Android app does the same).
+    private func forgetUnpaired(keeping paired: Set<String>) {
+        var hidden = hiddenSessions
+        hidden.keepOnly(paired)
+        if hidden != hiddenSessions { hiddenSessions = hidden; saveHiddenSessions() }
+        endedByMac = endedByMac.filter { paired.contains($0.key) }
+        let defaults = UserDefaults.standard
+        if let last = defaults.string(forKey: Self.lastMacKey), !paired.contains(last) { defaults.removeObject(forKey: Self.lastMacKey) }
+        let heard = Self.lastHeardStore
+        if heard.keys.contains(where: { !paired.contains($0) }) { defaults.set(heard.filter { paired.contains($0.key) }, forKey: Self.lastHeardKey) }
+        let selectedAt = Self.lastSelectedStore
+        if selectedAt.keys.contains(where: { !paired.contains($0) }) { defaults.set(selectedAt.filter { paired.contains($0.key) }, forKey: Self.lastSelectedKey) }
     }
 
     private func saveTabMemory() {
